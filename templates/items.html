@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Items</h1><p>Each item carries its own GST rate and HSN code, which flow onto every bill and invoice.</p></div>
+  <div class="actions"><a class="btn" href="{{ url_for('export', kind='stock') }}">Export CSV</a></div>
+</div>
+
+<div class="card">
+  <h2 id="form-title">Add an item</h2>
+  <p class="sub">Opening stock is what you already have on hand before you start recording purchases here.</p>
+  <form method="post" action="{{ url_for('items_save') }}" id="item-form">
+    <input type="hidden" name="id" id="f-id">
+    <div class="row r3">
+      <div class="field"><label for="f-name">Item name</label><input id="f-name" name="name" required placeholder="e.g. Masala Kaju"></div>
+      <div class="field"><label for="f-hsn">HSN code</label><input id="f-hsn" name="hsn" placeholder="e.g. 2008"></div>
+      <div class="field"><label for="f-gst">GST rate</label>
+        <select id="f-gst" name="gst_rate">{% for r in GST_RATES %}<option value="{{ r }}" {{ 'selected' if r == 5 }}>{{ r }}%</option>{% endfor %}</select>
+      </div>
+    </div>
+    <div class="row r3">
+      <div class="field"><label for="f-unit">Unit</label>
+        <select id="f-unit" name="unit">{% for u in UNITS %}<option value="{{ u }}">{{ u }}</option>{% endfor %}</select>
+      </div>
+      <div class="field"><label for="f-sale">Default sale rate (&#8377; per unit)</label><input id="f-sale" name="sale_rate" type="number" step="0.01" min="0" value="0"></div>
+      <div class="field"><label for="f-low">Alert when stock falls to</label><input id="f-low" name="low_stock_qty" type="number" step="0.001" min="0" value="0"></div>
+    </div>
+    <div class="row r3">
+      <div class="field"><label for="f-oq">Opening stock qty</label><input id="f-oq" name="opening_qty" type="number" step="0.001" min="0" value="0"></div>
+      <div class="field"><label for="f-or">Opening cost (&#8377; per unit)</label><input id="f-or" name="opening_rate" type="number" step="0.01" min="0" value="0"></div>
+      <div class="field" style="display:flex;align-items:flex-end;gap:.5rem">
+        <button class="btn primary" type="submit">Save item</button>
+        <button class="btn" type="button" id="reset-form" style="display:none">Cancel</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Active items</h2>
+  <p class="sub">{{ rows|length }} item{{ '' if rows|length == 1 else 's' }}.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Item</th><th>HSN</th><th class="num">GST</th><th class="num">In stock</th><th class="num">Avg cost</th><th class="num">Stock value</th><th class="num">Sale rate</th><th class="num">Reorder at</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.name }} {% if r.low %}<span class="badge b-red">low</span>{% endif %}</td>
+        <td class="muted small">{{ r.hsn or '-' }}</td>
+        <td class="num">{{ r.gst_rate|round(0)|int }}%</td>
+        <td class="num">{{ r.stock_qty|qty }} {{ r.unit }}</td>
+        <td class="num">&#8377;{{ r.avg_cost|inr }}</td>
+        <td class="num">&#8377;{{ r.stock_value|inr }}</td>
+        <td class="num">&#8377;{{ r.sale_rate|inr }}</td>
+        <td class="num">{{ r.low_stock_qty|qty }}</td>
+        <td class="num">
+          <button class="btn sm edit" type="button"
+            data-id="{{ r.id }}" data-name="{{ r.name }}" data-hsn="{{ r.hsn }}"
+            data-gst="{{ r.gst_rate }}" data-unit="{{ r.unit }}" data-sale="{{ r.sale_rate }}"
+            data-low="{{ r.low_stock_qty }}">Edit</button>
+          <form method="post" action="{{ url_for('items_toggle', item_id=r.id) }}" class="inline">
+            <button class="btn sm danger" type="submit">Archive</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}<tr><td colspan="9" class="empty">No items yet.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+{% if inactive %}
+<div class="card">
+  <h2>Archived</h2>
+  <div class="tw"><table><tbody>
+    {% for r in inactive %}<tr><td>{{ r.name }}</td><td class="num">
+      <form method="post" action="{{ url_for('items_toggle', item_id=r.id) }}" class="inline"><button class="btn sm" type="submit">Restore</button></form>
+    </td></tr>{% endfor %}
+  </tbody></table></div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.edit').forEach(function(b){
+  b.addEventListener('click', function(){
+    var d = b.dataset;
+    document.getElementById('f-id').value = d.id;
+    document.getElementById('f-name').value = d.name;
+    document.getElementById('f-hsn').value = d.hsn;
+    document.getElementById('f-gst').value = parseFloat(d.gst);
+    document.getElementById('f-unit').value = d.unit;
+    document.getElementById('f-sale').value = d.sale;
+    document.getElementById('f-low').value = d.low;
+    document.getElementById('form-title').textContent = 'Edit ' + d.name;
+    document.getElementById('reset-form').style.display = '';
+    window.scrollTo({top:0, behavior:'smooth'});
+  });
+});
+var rf = document.getElementById('reset-form');
+if (rf) rf.addEventListener('click', function(){
+  document.getElementById('item-form').reset();
+  document.getElementById('f-id').value = '';
+  document.getElementById('form-title').textContent = 'Add an item';
+  rf.style.display = 'none';
+});
+</script>
+{% endblock %}

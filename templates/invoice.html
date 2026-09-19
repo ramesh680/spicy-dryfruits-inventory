@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Invoice {{ doc.invoice_no }}{% endblock %}
+{% block body %}
+<div class="page-head no-print">
+  <div><h1>Invoice {{ doc.invoice_no }}</h1>
+    <p>Gross profit on this invoice: <strong style="color:{{ 'var(--green)' if profit >= 0 else 'var(--red)' }}">&#8377;{{ profit|inr }}</strong></p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('sales') }}">Back</a>
+    <a class="btn" href="{{ url_for('sale_new') }}">New sale</a>
+    <button class="btn primary" onclick="window.print()">Print / Save as PDF</button>
+  </div>
+</div>
+
+<div class="invoice">
+  <div class="inv-title">Tax Invoice</div>
+  <div class="inv-head">
+    <div>
+      <h1>{{ s.business_name }}</h1>
+      {% if s.address %}<div style="font-size:.85rem;white-space:pre-line">{{ s.address }}</div>{% endif %}
+      <div style="font-size:.85rem">{{ STATE_NAME.get(s.state_code, '') }} ({{ s.state_code }})</div>
+      {% if s.gstin %}<div style="font-size:.85rem"><strong>GSTIN:</strong> {{ s.gstin }}</div>{% endif %}
+      {% if s.phone %}<div style="font-size:.85rem">{{ s.phone }}{% if s.email %} &middot; {{ s.email }}{% endif %}</div>{% endif %}
+    </div>
+    <div style="text-align:right;font-size:.85rem">
+      <div><strong>Invoice no.</strong> {{ doc.invoice_no }}</div>
+      <div><strong>Date</strong> {{ doc.invoice_date|dmy }}</div>
+      <div><strong>Payment</strong> {{ doc.payment_mode }}</div>
+      <div style="margin-top:.3rem">{{ 'Inter-state supply' if doc.interstate else 'Intra-state supply' }}</div>
+    </div>
+  </div>
+
+  <div class="inv-meta">
+    <div class="inv-box">
+      <div class="lbl">Bill to</div>
+      <div><strong>{{ doc.party_name }}</strong></div>
+      {% if party %}
+        {% if party.address %}<div style="white-space:pre-line">{{ party.address }}</div>{% endif %}
+        {% if party.gstin %}<div>GSTIN: {{ party.gstin }}</div>{% endif %}
+        {% if party.phone %}<div>{{ party.phone }}</div>{% endif %}
+      {% endif %}
+    </div>
+    <div class="inv-box">
+      <div class="lbl">Place of supply</div>
+      <div>{{ STATE_NAME.get(doc.state_code, doc.state_code) }} ({{ doc.state_code }})</div>
+      <div style="margin-top:.4rem" class="lbl">Tax applied</div>
+      <div>{{ 'IGST' if doc.interstate else 'CGST + SGST' }}</div>
+    </div>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th style="width:26px">#</th><th>Description</th><th>HSN</th>
+      <th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc</th><th class="num">Taxable</th>
+      {% if doc.interstate %}<th class="num">IGST</th>{% else %}<th class="num">CGST</th><th class="num">SGST</th>{% endif %}
+      <th class="num">Amount</th>
+    </tr></thead>
+    <tbody>
+      {% for l in lines %}<tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ l.item_name }}</td>
+        <td>{{ l.hsn or '-' }}</td>
+        <td class="num">{{ l.qty|qty }}</td>
+        <td class="num">{{ l.rate|inr }}</td>
+        <td class="num">{{ l.discount_pct }}%</td>
+        <td class="num">{{ l.taxable|inr }}</td>
+        {% if doc.interstate %}
+          <td class="num">{{ l.igst|inr }}<div style="font-size:.7rem;color:#888">{{ l.gst_rate|round(0)|int }}%</div></td>
+        {% else %}
+          <td class="num">{{ l.cgst|inr }}<div style="font-size:.7rem;color:#888">{{ (l.gst_rate / 2)|round(2) }}%</div></td>
+          <td class="num">{{ l.sgst|inr }}<div style="font-size:.7rem;color:#888">{{ (l.gst_rate / 2)|round(2) }}%</div></td>
+        {% endif %}
+        <td class="num" style="font-weight:600">{{ l.total|inr }}</td>
+      </tr>{% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="6">Total</td>
+        <td class="num">{{ doc.taxable|inr }}</td>
+        {% if doc.interstate %}<td class="num">{{ doc.igst|inr }}</td>
+        {% else %}<td class="num">{{ doc.cgst|inr }}</td><td class="num">{{ doc.sgst|inr }}</td>{% endif %}
+        <td class="num">{{ (doc.total - doc.round_off)|inr }}</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="inv-meta" style="margin-top:1rem">
+    <div class="inv-box">
+      <div class="lbl">Tax summary by rate</div>
+      <table style="font-size:.8rem">
+        <thead><tr><th>Rate</th><th class="num">Taxable</th><th class="num">Tax</th></tr></thead>
+        <tbody>{% for b in breakup %}<tr>
+          <td>{{ b.gst_rate|round(0)|int }}%</td><td class="num">{{ b.taxable|inr }}</td><td class="num">{{ b.tax|inr }}</td>
+        </tr>{% endfor %}</tbody>
+      </table>
+    </div>
+    <div class="inv-box">
+      <table style="font-size:.85rem">
+        <tbody>
+          <tr><td>Taxable value</td><td class="num">{{ doc.taxable|inr }}</td></tr>
+          {% if doc.interstate %}<tr><td>IGST</td><td class="num">{{ doc.igst|inr }}</td></tr>
+          {% else %}<tr><td>CGST</td><td class="num">{{ doc.cgst|inr }}</td></tr>
+                    <tr><td>SGST</td><td class="num">{{ doc.sgst|inr }}</td></tr>{% endif %}
+          <tr><td>Round off</td><td class="num">{{ doc.round_off|inr }}</td></tr>
+        </tbody>
+        <tfoot><tr><td><strong>Grand total</strong></td><td class="num" style="font-size:1.05rem"><strong>&#8377;{{ doc.total|inr }}</strong></td></tr></tfoot>
+      </table>
+    </div>
+  </div>
+
+  <div class="inv-box" style="margin-top:1rem">
+    <div class="lbl">Amount in words</div>
+    <div>{{ words }}</div>
+  </div>
+
+  {% if doc.notes %}<p style="font-size:.8rem;margin-top:.8rem"><strong>Notes:</strong> {{ doc.notes }}</p>{% endif %}
+
+  <div class="inv-meta" style="margin-top:1.2rem">
+    <div style="font-size:.78rem;color:#555;white-space:pre-line">
+      {% if s.bank_details %}<strong>Bank details</strong>{{ '\n' }}{{ s.bank_details }}{{ '\n\n' }}{% endif %}
+      {% if s.terms %}<strong>Terms</strong>{{ '\n' }}{{ s.terms }}{% endif %}
+    </div>
+    <div style="text-align:right;font-size:.8rem;padding-top:2.5rem;color:#333">
+      <div style="border-top:1px solid #999;display:inline-block;padding-top:.3rem;min-width:180px">
+        For <strong>{{ s.business_name }}</strong><div style="color:#777;margin-top:.2rem">Authorised signatory</div>
+      </div>
+    </div>
+  </div>
+  <p style="font-size:.7rem;color:#999;text-align:center;margin:1.2rem 0 0">
+    This is a computer-generated invoice. E. &amp; O.E.</p>
+</div>
+{% endblock %}

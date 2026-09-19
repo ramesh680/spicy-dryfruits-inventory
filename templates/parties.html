@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div><h1>Contacts</h1><p>Suppliers and customers. The state on a contact decides whether a bill is CGST+SGST or IGST.</p></div></div>
+
+<div class="card">
+  <h2 id="form-title">Add a contact</h2>
+  <form method="post" action="{{ url_for('parties_save') }}" id="party-form">
+    <input type="hidden" name="id" id="p-id">
+    <div class="row r3">
+      <div class="field"><label for="p-name">Name</label><input id="p-name" name="name" required></div>
+      <div class="field"><label for="p-kind">Type</label>
+        <select id="p-kind" name="kind"><option value="customer">Customer</option><option value="supplier">Supplier</option><option value="both">Both</option></select>
+      </div>
+      <div class="field"><label for="p-gstin">GSTIN</label><input id="p-gstin" name="gstin" placeholder="27ABCDE1234F1Z5" maxlength="15" style="text-transform:uppercase"></div>
+    </div>
+    <div class="row r3">
+      <div class="field"><label for="p-state">State</label>
+        <select id="p-state" name="state_code">{% for code, name in STATE_CODES %}<option value="{{ code }}" {{ 'selected' if code == s.state_code }}>{{ code }} &ndash; {{ name }}</option>{% endfor %}</select>
+      </div>
+      <div class="field"><label for="p-phone">Phone</label><input id="p-phone" name="phone"></div>
+      <div class="field"><label for="p-addr">Address</label><input id="p-addr" name="address"></div>
+    </div>
+    <button class="btn primary" type="submit">Save contact</button>
+    <button class="btn" type="button" id="reset-form" style="display:none">Cancel</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>All contacts</h2>
+  <div class="tw"><table>
+    <thead><tr><th>Name</th><th>Type</th><th>GSTIN</th><th>State</th><th>Phone</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}<tr>
+        <td>{{ r.name }}<div class="small muted">{{ r.address }}</div></td>
+        <td><span class="badge b-grey">{{ r.kind }}</span></td>
+        <td class="mono small">{{ r.gstin or '-' }}</td>
+        <td class="small">{{ STATE_NAME.get(r.state_code, r.state_code) }}{% if r.state_code != s.state_code %} <span class="badge b-amber">IGST</span>{% endif %}</td>
+        <td class="small">{{ r.phone or '-' }}</td>
+        <td class="num">
+          <button class="btn sm edit" type="button" data-id="{{ r.id }}" data-name="{{ r.name }}" data-kind="{{ r.kind }}"
+            data-gstin="{{ r.gstin }}" data-state="{{ r.state_code }}" data-phone="{{ r.phone }}" data-addr="{{ r.address }}">Edit</button>
+          <form method="post" action="{{ url_for('parties_delete', pid=r.id) }}" class="inline"
+                onsubmit="return confirm('Remove {{ r.name }}? Past bills keep the name on them.')">
+            <button class="btn sm danger" type="submit">Remove</button>
+          </form>
+        </td>
+      </tr>{% else %}<tr><td colspan="6" class="empty">No contacts yet.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.edit').forEach(function(b){
+  b.addEventListener('click', function(){
+    var d = b.dataset;
+    document.getElementById('p-id').value = d.id;
+    document.getElementById('p-name').value = d.name;
+    document.getElementById('p-kind').value = d.kind;
+    document.getElementById('p-gstin').value = d.gstin;
+    document.getElementById('p-state').value = d.state;
+    document.getElementById('p-phone').value = d.phone;
+    document.getElementById('p-addr').value = d.addr;
+    document.getElementById('form-title').textContent = 'Edit ' + d.name;
+    document.getElementById('reset-form').style.display = '';
+    window.scrollTo({top:0, behavior:'smooth'});
+  });
+});
+var rf = document.getElementById('reset-form');
+if (rf) rf.addEventListener('click', function(){
+  document.getElementById('party-form').reset();
+  document.getElementById('p-id').value = '';
+  document.getElementById('form-title').textContent = 'Add a contact';
+  rf.style.display = 'none';
+});
+</script>
+{% endblock %}

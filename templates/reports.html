@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Reports</h1><p>{{ r.start|dmy }} to {{ r.end|dmy }}</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='gst', start=r.start, end=r.end) }}">GST summary CSV</a>
+    <a class="btn" href="{{ url_for('export', kind='itemwise', start=r.start, end=r.end) }}">Item profit CSV</a>
+  </div>
+</div>
+
+<div class="card">
+  <form method="get" class="row r3">
+    <div class="field"><label for="start">From</label><input type="date" id="start" name="start" value="{{ r.start }}"></div>
+    <div class="field"><label for="end">To</label><input type="date" id="end" name="end" value="{{ r.end }}"></div>
+    <div class="field" style="display:flex;align-items:flex-end"><button class="btn" type="submit">Apply</button></div>
+  </form>
+</div>
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <div class="stat accent"><div class="label">Sales (taxable)</div><div class="value">&#8377;{{ r.sale_tot.taxable|inr }}</div><div class="note">{{ r.sales_rows|length }} invoices</div></div>
+  <div class="stat"><div class="label">Cost of goods sold</div><div class="value">&#8377;{{ r.cogs|inr }}</div><div class="note">at weighted-average cost</div></div>
+  <div class="stat {{ 'good' if r.gross_profit >= 0 else 'bad' }}"><div class="label">Gross profit</div><div class="value">&#8377;{{ r.gross_profit|inr }}</div><div class="note">{{ r.margin }}% margin</div></div>
+  <div class="stat {{ 'bad' if r.net_gst > 0 else 'good' }}"><div class="label">{{ 'Net GST payable' if r.net_gst >= 0 else 'Credit carried forward' }}</div>
+    <div class="value">&#8377;{{ (r.net_gst if r.net_gst >= 0 else -r.net_gst)|inr }}</div><div class="note">output less input credit</div></div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <h2>Output tax &mdash; on sales</h2>
+    <p class="sub">What you collected, grouped the way a GSTR summary wants it.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Rate</th><th class="num">Taxable</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">IGST</th></tr></thead>
+      <tbody>{% for b in r.sale_breakup %}<tr>
+        <td>{{ b.gst_rate|round(0)|int }}%</td><td class="num">{{ b.taxable|inr }}</td>
+        <td class="num">{{ b.cgst|inr }}</td><td class="num">{{ b.sgst|inr }}</td><td class="num">{{ b.igst|inr }}</td>
+      </tr>{% else %}<tr><td colspan="5" class="empty">No sales in this period.</td></tr>{% endfor %}</tbody>
+      <tfoot><tr><td>Total</td><td class="num">{{ r.sale_tot.taxable|inr }}</td><td class="num">{{ r.sale_tot.cgst|inr }}</td>
+        <td class="num">{{ r.sale_tot.sgst|inr }}</td><td class="num">{{ r.sale_tot.igst|inr }}</td></tr></tfoot>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h2>Input tax credit &mdash; on purchases</h2>
+    <p class="sub">GST you already paid to suppliers.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Rate</th><th class="num">Taxable</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">IGST</th></tr></thead>
+      <tbody>{% for b in r.purch_breakup %}<tr>
+        <td>{{ b.gst_rate|round(0)|int }}%</td><td class="num">{{ b.taxable|inr }}</td>
+        <td class="num">{{ b.cgst|inr }}</td><td class="num">{{ b.sgst|inr }}</td><td class="num">{{ b.igst|inr }}</td>
+      </tr>{% else %}<tr><td colspan="5" class="empty">No purchases in this period.</td></tr>{% endfor %}</tbody>
+      <tfoot><tr><td>Total</td><td class="num">{{ r.purch_tot.taxable|inr }}</td><td class="num">{{ r.purch_tot.cgst|inr }}</td>
+        <td class="num">{{ r.purch_tot.sgst|inr }}</td><td class="num">{{ r.purch_tot.igst|inr }}</td></tr></tfoot>
+    </table></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Net GST position</h2>
+  <table>
+    <tbody>
+      <tr><td>Output tax collected on sales</td><td class="num">&#8377;{{ r.out_tax|inr }}</td></tr>
+      <tr><td>Less: input tax credit on purchases</td><td class="num">&#8377;{{ r.in_tax|inr }}</td></tr>
+    </tbody>
+    <tfoot><tr><td>{{ 'Net GST payable' if r.net_gst >= 0 else 'Credit carried forward' }}</td>
+      <td class="num" style="font-size:1.1rem">&#8377;{{ (r.net_gst if r.net_gst >= 0 else -r.net_gst)|inr }}</td></tr></tfoot>
+  </table>
+  <p class="small muted" style="margin:.8rem 0 0">A working figure to plan cash with, not a filed return &mdash; reverse charge, blocked credits and ineligible ITC are not applied here. Check with your accountant.</p>
+</div>
+
+<div class="card">
+  <h2>Profit by item</h2>
+  <p class="sub">Revenue is taxable value; cost is the weighted-average cost at the moment of each sale.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Item</th><th class="num">Qty sold</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th></tr></thead>
+    <tbody>{% for b in r.items_sold %}<tr>
+      <td>{{ b.name }}</td><td class="num">{{ b.qty|qty }}</td><td class="num">{{ b.revenue|inr }}</td>
+      <td class="num">{{ b.cost|inr }}</td>
+      <td class="num" style="font-weight:600;color:{{ 'var(--green)' if b.profit >= 0 else 'var(--red)' }}">{{ b.profit|inr }}</td>
+      <td class="num">{{ b.margin }}%</td>
+    </tr>{% else %}<tr><td colspan="6" class="empty">Nothing sold in this period.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>Day by day</h2>
+  <div class="tw"><table>
+    <thead><tr><th>Date</th><th class="num">Purchases</th><th class="num">Sales</th><th class="num">Cost of sales</th><th class="num">Gross profit</th></tr></thead>
+    <tbody>{% for d in r.days %}<tr>
+      <td>{{ d.day|dmy }}</td><td class="num">{{ d.purchases|inr }}</td><td class="num">{{ d.sales|inr }}</td>
+      <td class="num">{{ d.cogs|inr }}</td>
+      <td class="num" style="color:{{ 'var(--green)' if d.profit >= 0 else 'var(--red)' }}">{{ d.profit|inr }}</td>
+    </tr>{% else %}<tr><td colspan="5" class="empty">No activity in this period.</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <div style="margin-top:.9rem;display:flex;gap:.5rem;flex-wrap:wrap">
+    <a class="btn sm" href="{{ url_for('export', kind='sales', start=r.start, end=r.end) }}">Sales register CSV</a>
+    <a class="btn sm" href="{{ url_for('export', kind='purchases', start=r.start, end=r.end) }}">Purchase register CSV</a>
+    <a class="btn sm" href="{{ url_for('export', kind='stock') }}">Stock CSV</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Purchase {{ doc.bill_no or '#' ~ doc.id }}</h1>
+    <p>{{ doc.party_name }} &middot; {{ doc.bill_date|dmy }} &middot; {{ STATE_NAME.get(doc.state_code, doc.state_code) }}</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('purchases') }}">Back to register</a>
+    <form method="post" action="{{ url_for('purchase_delete', pid=doc.id) }}" class="inline"
+          onsubmit="return confirm('Delete this bill? Stock and costing will be recalculated.')">
+      <button class="btn danger" type="submit">Delete</button></form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="tw"><table>
+    <thead><tr><th>Item</th><th>HSN</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc</th><th class="num">Taxable</th><th class="num">GST</th><th class="num">Tax</th><th class="num">Total</th></tr></thead>
+    <tbody>
+      {% for l in lines %}<tr>
+        <td>{{ l.item_name }}</td><td class="muted small">{{ l.hsn or '-' }}</td>
+        <td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.rate|inr }}</td>
+        <td class="num">{{ l.discount_pct }}%</td><td class="num">{{ l.taxable|inr }}</td>
+        <td class="num">{{ l.gst_rate|round(0)|int }}%</td>
+        <td class="num">{{ (l.cgst + l.sgst + l.igst)|inr }}</td>
+        <td class="num" style="font-weight:600">{{ l.total|inr }}</td>
+      </tr>{% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><td colspan="5">Taxable value</td><td class="num">{{ doc.taxable|inr }}</td><td colspan="3"></td></tr>
+      {% if not doc.interstate %}
+      <tr><td colspan="8">CGST</td><td class="num">{{ doc.cgst|inr }}</td></tr>
+      <tr><td colspan="8">SGST</td><td class="num">{{ doc.sgst|inr }}</td></tr>
+      {% else %}<tr><td colspan="8">IGST</td><td class="num">{{ doc.igst|inr }}</td></tr>{% endif %}
+      <tr><td colspan="8">Round off</td><td class="num">{{ doc.round_off|inr }}</td></tr>
+      <tr><td colspan="8">Bill total</td><td class="num" style="font-size:1.05rem">&#8377;{{ doc.total|inr }}</td></tr>
+    </tfoot>
+  </table></div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <h2>Input tax credit by rate</h2>
+    <table>
+      <thead><tr><th>Rate</th><th class="num">Taxable</th><th class="num">Credit</th></tr></thead>
+      <tbody>{% for b in breakup %}<tr><td>{{ b.gst_rate|round(0)|int }}%</td><td class="num">{{ b.taxable|inr }}</td><td class="num">{{ b.tax|inr }}</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h2>Details</h2>
+    <table><tbody>
+      <tr><td>Payment</td><td class="num">{{ doc.payment_mode }}</td></tr>
+      <tr><td>Supply type</td><td class="num">{{ 'Inter-state (IGST)' if doc.interstate else 'Intra-state (CGST+SGST)' }}</td></tr>
+      <tr><td>Recorded</td><td class="num small">{{ doc.created_at }}</td></tr>
+    </tbody></table>
+    {% if doc.notes %}<p class="small muted" style="margin-top:.8rem">{{ doc.notes }}</p>{% endif %}
+  </div>
+</div>
+{% endblock %}

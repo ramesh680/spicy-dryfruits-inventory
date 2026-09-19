@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ s.business_name }}{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127792;</text></svg>">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="{{ url_for('dashboard') }}"><span class="dot">&#9679;</span>{{ s.business_name }}</a>
+    <nav>
+      <a href="{{ url_for('dashboard') }}" class="{{ 'on' if request.endpoint=='dashboard' }}">Dashboard</a>
+      <a href="{{ url_for('purchase_new') }}" class="{{ 'on' if request.endpoint=='purchase_new' }}">+ Buy</a>
+      <a href="{{ url_for('sale_new') }}" class="{{ 'on' if request.endpoint=='sale_new' }}">+ Sell</a>
+      <a href="{{ url_for('stock') }}" class="{{ 'on' if request.endpoint=='stock' }}">Stock</a>
+      <a href="{{ url_for('purchases') }}" class="{{ 'on' if request.endpoint in ('purchases','purchase_view') }}">Purchases</a>
+      <a href="{{ url_for('sales') }}" class="{{ 'on' if request.endpoint in ('sales','invoice') }}">Sales</a>
+      <a href="{{ url_for('reports') }}" class="{{ 'on' if request.endpoint=='reports' }}">Reports</a>
+      <a href="{{ url_for('items') }}" class="{{ 'on' if request.endpoint=='items' }}">Items</a>
+      <a href="{{ url_for('parties') }}" class="{{ 'on' if request.endpoint=='parties' }}">Contacts</a>
+      <a href="{{ url_for('settings') }}" class="{{ 'on' if request.endpoint=='settings' }}">Settings</a>
+    </nav>
+  </div>
+</header>
+<main>
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+    {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+  {% endwith %}
+  {% block body %}{% endblock %}
+</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

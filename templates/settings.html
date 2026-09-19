@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div><h1>Settings</h1><p>These details appear on every invoice you print.</p></div></div>
+<form method="post">
+  <div class="card">
+    <h2>Business</h2>
+    <div class="row r2">
+      <div class="field"><label for="business_name">Business name</label><input id="business_name" name="business_name" value="{{ s.business_name }}" required></div>
+      <div class="field"><label for="gstin">GSTIN</label><input id="gstin" name="gstin" value="{{ s.gstin }}" maxlength="15" placeholder="27ABCDE1234F1Z5" style="text-transform:uppercase"></div>
+    </div>
+    <div class="field"><label for="address">Address</label><textarea id="address" name="address">{{ s.address }}</textarea></div>
+    <div class="row r3">
+      <div class="field"><label for="state_code">Home state</label>
+        <select id="state_code" name="state_code">{% for code, name in STATE_CODES %}<option value="{{ code }}" {{ 'selected' if code == s.state_code }}>{{ code }} &ndash; {{ name }}</option>{% endfor %}</select>
+      </div>
+      <div class="field"><label for="phone">Phone</label><input id="phone" name="phone" value="{{ s.phone }}"></div>
+      <div class="field"><label for="email">Email</label><input id="email" name="email" value="{{ s.email }}"></div>
+    </div>
+    <p class="small muted">A sale to any other state is billed as IGST; within your home state it splits into CGST and SGST.</p>
+  </div>
+
+  <div class="card">
+    <h2>Invoicing</h2>
+    <div class="row r2">
+      <div class="field"><label for="invoice_prefix">Invoice prefix</label><input id="invoice_prefix" name="invoice_prefix" value="{{ s.invoice_prefix }}" maxlength="10">
+        <p class="small muted" style="margin:.3rem 0 0">Numbers run as {{ s.invoice_prefix }}/2026-27/0001, restarting each financial year.</p></div>
+      <div class="field" style="display:flex;align-items:center;gap:.5rem;padding-top:1.3rem">
+        <input type="checkbox" id="gst_enabled" name="gst_enabled" value="1" {{ 'checked' if s.gst_enabled }} style="width:auto">
+        <label for="gst_enabled" style="margin:0">Charge GST on invoices</label>
+      </div>
+    </div>
+    <div class="field"><label for="bank_details">Bank details (printed on invoices)</label><textarea id="bank_details" name="bank_details" placeholder="Bank name, A/c no., IFSC, UPI ID">{{ s.bank_details }}</textarea></div>
+    <div class="field"><label for="terms">Terms &amp; conditions</label><textarea id="terms" name="terms" placeholder="Goods once sold will not be taken back...">{{ s.terms }}</textarea></div>
+    <button class="btn primary" type="submit">Save settings</button>
+  </div>
+</form>
+
+<div class="card">
+  <h2>About GST rates</h2>
+  <p class="small muted">Each item carries its own rate and HSN code, set on the Items page. The seeded items use 5%, the slab that plain and processed dry fruits and nuts fall under after the September 2025 rate revision. Confirm the current rate and HSN for your exact products with your accountant before you file.</p>
+</div>
+{% endblock %}

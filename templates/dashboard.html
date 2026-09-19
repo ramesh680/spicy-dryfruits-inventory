@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <h1>Today at a glance</h1>
+    <p>{{ today|dmy }} &middot; all figures in &#8377;</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('purchase_new') }}">Record purchase</a>
+    <a class="btn primary" href="{{ url_for('sale_new') }}">Record sale</a>
+  </div>
+</div>
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <div class="stat accent">
+    <div class="label">Today&rsquo;s sales</div>
+    <div class="value">&#8377;{{ today_sales.total|inr }}</div>
+    <div class="note">{{ today_sales.n }} invoice{{ '' if today_sales.n == 1 else 's' }} &middot; {{ today_sales.taxable|inr }} before GST</div>
+  </div>
+  <div class="stat">
+    <div class="label">Today&rsquo;s purchases</div>
+    <div class="value">&#8377;{{ today_purch.total|inr }}</div>
+    <div class="note">{{ today_purch.n }} bill{{ '' if today_purch.n == 1 else 's' }}</div>
+  </div>
+  <div class="stat {{ 'good' if today_profit >= 0 else 'bad' }}">
+    <div class="label">Today&rsquo;s gross profit</div>
+    <div class="value">&#8377;{{ today_profit|inr }}</div>
+    <div class="note">sales less cost of goods sold</div>
+  </div>
+  <div class="stat">
+    <div class="label">Stock on hand</div>
+    <div class="value">&#8377;{{ stock_value|inr }}</div>
+    <div class="note">{% if low %}<span class="badge b-amber">{{ low|length }} item{{ '' if low|length == 1 else 's' }} low</span>{% else %}all items above reorder level{% endif %}</div>
+  </div>
+</div>
+
+{% if low %}
+<div class="card">
+  <h2>Running low</h2>
+  <p class="sub">At or below the reorder level you set on each item.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Item</th><th class="num">In stock</th><th class="num">Reorder at</th><th class="num">Avg cost</th></tr></thead>
+    <tbody>{% for r in low %}<tr>
+      <td>{{ r.name }}</td>
+      <td class="num"><span class="badge b-red">{{ r.stock_qty|qty }} {{ r.unit }}</span></td>
+      <td class="num">{{ r.low_stock_qty|qty }} {{ r.unit }}</td>
+      <td class="num">&#8377;{{ r.avg_cost|inr }}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Last 14 days</h2>
+  <p class="sub">Taxable value, excluding GST.</p>
+  {% set peak = (trend|map(attribute='sales')|list + trend|map(attribute='purchases')|list)|max %}
+  <div class="trend">
+    {% for d in trend %}
+    <div class="col" title="{{ d.day }} &middot; sales {{ d.sales|inr }} &middot; purchases {{ d.purchases|inr }}">
+      <div class="bar s" style="height:{{ (d.sales / peak * 82) if peak else 0 }}%"></div>
+      <div class="bar p" style="height:{{ (d.purchases / peak * 82) if peak else 0 }}%"></div>
+      <span>{{ d.day[8:10] }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="legend"><span><i style="background:var(--accent)"></i>Sales</span><span><i style="background:var(--border)"></i>Purchases</span></div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <h2>{{ month_label }} so far</h2>
+    <p class="sub">Month to date.</p>
+    <table>
+      <tbody>
+        <tr><td>Sales (taxable)</td><td class="num">&#8377;{{ month_sales.taxable|inr }}</td></tr>
+        <tr><td>Purchases (taxable)</td><td class="num">&#8377;{{ month_purch.taxable|inr }}</td></tr>
+        <tr><td>Gross profit</td><td class="num" style="color:{{ 'var(--green)' if month_profit >= 0 else 'var(--red)' }};font-weight:650">&#8377;{{ month_profit|inr }}</td></tr>
+        <tr><td>Output GST collected</td><td class="num">&#8377;{{ out_tax|inr }}</td></tr>
+        <tr><td>Input tax credit</td><td class="num">&#8377;{{ in_tax|inr }}</td></tr>
+      </tbody>
+      <tfoot><tr><td>{{ 'Net GST payable' if net_gst >= 0 else 'Credit carried forward' }}</td><td class="num">&#8377;{{ (net_gst if net_gst >= 0 else -net_gst)|inr }}</td></tr></tfoot>
+    </table>
+    <p class="small muted" style="margin:.7rem 0 0">Indicative only &mdash; confirm with your accountant before filing.</p>
+  </div>
+
+  <div class="card">
+    <h2>Latest activity</h2>
+    <p class="sub">Most recent sales and purchases.</p>
+    <h3 class="muted" style="margin-top:.4rem">Sales</h3>
+    <table><tbody>
+      {% for r in recent_sales %}<tr>
+        <td><a href="{{ url_for('invoice', sid=r.id) }}">{{ r.invoice_no }}</a><div class="small muted">{{ r.party_name }}</div></td>
+        <td class="num">{{ r.invoice_date|dmy }}</td>
+        <td class="num">&#8377;{{ r.total|inr }}</td>
+      </tr>{% else %}<tr><td colspan="3" class="empty">No sales recorded yet.</td></tr>{% endfor %}
+    </tbody></table>
+    <h3 class="muted" style="margin-top:1rem">Purchases</h3>
+    <table><tbody>
+      {% for r in recent_purchases %}<tr>
+        <td><a href="{{ url_for('purchase_view', pid=r.id) }}">{{ r.bill_no or 'Bill #' ~ r.id }}</a><div class="small muted">{{ r.party_name }}</div></td>
+        <td class="num">{{ r.bill_date|dmy }}</td>
+        <td class="num">&#8377;{{ r.total|inr }}</td>
+      </tr>{% else %}<tr><td colspan="3" class="empty">No purchases recorded yet.</td></tr>{% endfor %}
+    </tbody></table>
+  </div>
+</div>
+{% endblock %}

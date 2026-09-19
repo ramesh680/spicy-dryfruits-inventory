@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div><h1>{{ heading }}</h1><p>{{ subhead }}</p></div>
+  <div class="actions"><span id="supply-tag" class="badge b-green">&nbsp;</span></div>
+</div>
+
+<form method="post" id="entry"
+      data-items='{{ items_json }}'
+      data-party-states='{{ party_states_json }}'
+      data-home-state="{{ s.state_code }}"
+      data-gst-enabled="{{ 1 if s.gst_enabled else 0 }}"
+      data-use-sale-rate="{{ 1 if use_sale_rate else 0 }}">
+
+  <div class="card">
+    <div class="row r3">
+      <div class="field">
+        <label for="{{ date_field }}">{{ date_label }}</label>
+        <input type="date" id="{{ date_field }}" name="{{ date_field }}" value="{{ today }}" required>
+      </div>
+      <div class="field">
+        <label for="{{ no_field }}">{{ no_label }}</label>
+        <input type="text" id="{{ no_field }}" name="{{ no_field }}" value="{{ no_value }}" placeholder="{{ no_placeholder }}">
+      </div>
+      <div class="field">
+        <label for="party_id">{{ party_label }}</label>
+        <select id="party_id" name="party_id">
+          <option value="">{{ walkin_label }}</option>
+          {% for p in parties %}<option value="{{ p.id }}">{{ p.name }}{% if p.gstin %} &middot; {{ p.gstin }}{% endif %}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="row r3">
+      <div class="field">
+        <label for="party_name">{{ walkin_name_label }}</label>
+        <input type="text" id="party_name" name="party_name" placeholder="{{ walkin_placeholder }}">
+      </div>
+      <div class="field" id="manual-state">
+        <label for="state_code">Place of supply</label>
+        <select id="state_code" name="state_code">
+          {% for code, name in STATE_CODES %}<option value="{{ code }}" {{ 'selected' if code == s.state_code }}>{{ code }} &ndash; {{ name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="payment_mode">Payment</label>
+        <select id="payment_mode" name="payment_mode">
+          {% for m in PAYMENT_MODES %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Items</h2>
+    <p class="sub">GST is picked up from each item&rsquo;s rate. Discount is a percentage off the line.</p>
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th style="width:38%;min-width:190px">Item</th>
+          <th class="num" style="width:110px">Qty</th>
+          <th class="num" style="width:120px">Rate</th>
+          <th class="num" style="width:90px">Disc %</th>
+          <th class="num" style="width:70px">GST</th>
+          <th class="num" style="width:100px">Tax</th>
+          <th class="num" style="width:120px">Line total</th>
+          <th style="width:40px"></th>
+        </tr></thead>
+        <tbody id="lines"></tbody>
+      </table>
+    </div>
+    <button type="button" class="btn sm" id="add-line" style="margin-top:.8rem">+ Add another item</button>
+  </div>
+
+  <div class="grid g2">
+    <div class="card">
+      <div class="field">
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes" placeholder="Vehicle number, transport, remarks..."></textarea>
+      </div>
+      <p class="small muted" id="t-breakup"></p>
+    </div>
+    <div class="card">
+      <h2>Bill total</h2>
+      <table>
+        <tbody>
+          <tr><td>Taxable value</td><td class="num">&#8377;<span id="t-taxable">0.00</span></td></tr>
+          <tr class="intra-only"><td>CGST</td><td class="num">&#8377;<span id="t-cgst">0.00</span></td></tr>
+          <tr class="intra-only"><td>SGST</td><td class="num">&#8377;<span id="t-sgst">0.00</span></td></tr>
+          <tr class="inter-only"><td>IGST</td><td class="num">&#8377;<span id="t-igst">0.00</span></td></tr>
+          <tr><td>Round off</td><td class="num">&#8377;<span id="t-round">0.00</span></td></tr>
+        </tbody>
+        <tfoot><tr><td>Total</td><td class="num" style="font-size:1.15rem">&#8377;<span id="t-grand">0.00</span></td></tr></tfoot>
+      </table>
+      <button type="submit" class="btn primary" style="width:100%;justify-content:center;margin-top:1rem">{{ submit_label }}</button>
+    </div>
+  </div>
+</form>
+
+<template id="line-tpl">
+  <tr>
+    <td>
+      <select class="f-item" name="item_id">
+        <option value="">Select item...</option>
+        {% for i in items %}<option value="{{ i.id }}">{{ i.name }}</option>{% endfor %}
+      </select>
+      {% if show_stock %}<div class="f-avail small muted" style="margin-top:.2rem"></div>{% endif %}
+    </td>
+    <td class="num"><input class="f-qty num" type="number" step="0.001" min="0" name="qty" placeholder="0"><div class="f-unit small muted right"></div></td>
+    <td class="num"><input class="f-rate num" type="number" step="0.01" min="0" name="rate" placeholder="0.00"></td>
+    <td class="num"><input class="f-disc num" type="number" step="0.01" min="0" max="100" name="discount_pct" value="0"></td>
+    <td class="num"><span class="f-gst small muted"></span></td>
+    <td class="num mono f-tax">0.00</td>
+    <td class="num mono f-total" style="font-weight:600">0.00</td>
+    <td class="num"><button type="button" class="btn sm f-del" title="Remove line">&times;</button></td>
+  </tr>
+</template>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='entry.js') }}"></script>{% endblock %}
