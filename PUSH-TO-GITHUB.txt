@@ -1,0 +1,39 @@
+Spicy Dry Fruits - inventory & GST tracker
+==========================================
+
+The folder in this zip is already a git repository: one commit is made and the
+remote is set to https://github.com/ramesh680/spicy-dryfruits-inventory.git
+
+TO PUT IT ON GITHUB
+-------------------
+1. Create an EMPTY repo at https://github.com/new
+   Name: spicy-dryfruits-inventory
+   Do NOT tick "Add a README", ".gitignore" or a licence - it must be empty.
+
+2. Unzip this folder, open PowerShell in it, and run:
+
+   git push -u origin main
+
+   If you'd rather use a different repo name, change the remote first:
+   git remote set-url origin https://github.com/ramesh680/<your-name>.git
+
+TO RUN IT LOCALLY
+-----------------
+   py -m pip install -r requirements.txt
+   py app.py
+
+   Then open http://localhost:5000
+
+TO RUN THE CHECKS
+-----------------
+   py tests/test_app.py
+
+TO DEPLOY ON RENDER
+-------------------
+   New -> Blueprint -> point it at the repo. render.yaml provisions the web
+   service and a PostgreSQL database and wires them together.
+
+   Use PostgreSQL, not SQLite, in production - a Render web service has an
+   ephemeral disk and a SQLite file would be wiped on every redeploy.
+
+See README.md for the full details.
