@@ -1,47 +1,50 @@
 {% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_filters.html" as fl %}
 {% block body %}
 <div class="page-head">
-  <div><h1>Sales register</h1><p>{{ start|dmy }} to {{ end|dmy }}</p></div>
+  <div><h1>Sales register</h1><p class="sub">{{ start|dmy }} to {{ end|dmy }}{% if q %} &middot; matching &ldquo;{{ q }}&rdquo;{% endif %}</p></div>
   <div class="actions">
-    <a class="btn" href="{{ url_for('export', kind='sales', start=start, end=end) }}">Export CSV</a>
-    <a class="btn primary" href="{{ url_for('sale_new') }}">Record sale</a>
+    <a class="btn" href="{{ url_for('export', kind='sales', start=start, end=end) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <a class="btn primary" href="{{ url_for('quick') }}">{{ icons.ic('bolt', 15) }} New sale</a>
   </div>
 </div>
 
-<div class="card">
-  <form method="get" class="row r3">
-    <div class="field"><label for="start">From</label><input type="date" id="start" name="start" value="{{ start }}"></div>
-    <div class="field"><label for="end">To</label><input type="date" id="end" name="end" value="{{ end }}"></div>
-    <div class="field" style="display:flex;align-items:flex-end"><button class="btn" type="submit">Apply</button></div>
-  </form>
-</div>
+{{ fl.rangebar('sales', presets, preset, start, end, q, 'Invoice no., customer or item') }}
 
 <div class="grid g4" style="margin-bottom:1.1rem">
   <div class="stat"><div class="label">Invoices</div><div class="value">{{ rows|length }}</div></div>
   <div class="stat accent"><div class="label">Collected</div><div class="value">&#8377;{{ grand|inr }}</div></div>
   <div class="stat {{ 'good' if profit >= 0 else 'bad' }}"><div class="label">Gross profit</div><div class="value">&#8377;{{ profit|inr }}</div></div>
   <div class="stat"><div class="label">Output GST</div>
-    <div class="value">&#8377;{{ (rows|sum(attribute='cgst') + rows|sum(attribute='sgst') + rows|sum(attribute='igst'))|inr }}</div>
-    <div class="note">collected on these invoices</div></div>
+    <div class="value">&#8377;{{ (rows|sum(attribute='cgst') + rows|sum(attribute='sgst') + rows|sum(attribute='igst'))|inr }}</div></div>
 </div>
 
 <div class="card">
   <div class="tw"><table>
-    <thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Supply</th><th class="num">Taxable</th><th class="num">GST</th><th class="num">Total</th><th class="num">Profit</th><th></th></tr></thead>
+    <thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Supply</th>
+      <th class="num">Taxable</th><th class="num">GST</th><th class="num">Total</th><th class="num">Profit</th><th></th></tr></thead>
     <tbody>
       {% for r in rows %}<tr>
         <td><a href="{{ url_for('invoice', sid=r.id) }}">{{ r.invoice_no }}</a></td>
-        <td class="small">{{ r.invoice_date|dmy }}</td>
+        <td class="small muted">{{ r.invoice_date|dmy }}</td>
         <td>{{ r.party_name }}<div class="small muted">{{ r.payment_mode }}</div></td>
         <td>{% if r.interstate %}<span class="badge b-amber">IGST</span>{% else %}<span class="badge b-green">CGST+SGST</span>{% endif %}</td>
         <td class="num">{{ r.taxable|inr }}</td>
         <td class="num">{{ (r.cgst + r.sgst + r.igst)|inr }}</td>
-        <td class="num" style="font-weight:600">&#8377;{{ r.total|inr }}</td>
+        <td class="num" style="font-weight:640">&#8377;{{ r.total|inr }}</td>
         <td class="num" style="color:{{ 'var(--green)' if (r.taxable - r.cogs) >= 0 else 'var(--red)' }}">{{ (r.taxable - r.cogs)|inr }}</td>
-        <td class="num"><form method="post" action="{{ url_for('sale_delete', sid=r.id) }}" class="inline"
-              onsubmit="return confirm('Delete invoice {{ r.invoice_no }}? Stock will be recalculated.')">
-            <button class="btn sm danger" type="submit">Delete</button></form></td>
-      </tr>{% else %}<tr><td colspan="9" class="empty">No sales in this period.</td></tr>{% endfor %}
+        <td class="num">
+          {% if is_admin %}
+          <a class="btn sm" href="{{ url_for('sale_edit', sid=r.id) }}">Edit</a>
+          <form method="post" action="{{ url_for('sale_delete', sid=r.id) }}" class="inline"
+                onsubmit="return confirm('Delete invoice {{ r.invoice_no }}? Stock will be recalculated. This cannot be undone.')">
+            <button class="btn sm danger" type="submit">Delete</button></form>
+          {% else %}<span class="muted small">&ndash;</span>{% endif %}
+        </td>
+      </tr>{% else %}<tr><td colspan="9" class="empty">
+        <strong>{% if q %}Nothing matches that search{% else %}No sales in this period{% endif %}</strong>
+        {% if q %}Try a different term, or widen the date range.{% else %}Record one and it will show up here.{% endif %}</td></tr>{% endfor %}
     </tbody>
   </table></div>
 </div>

@@ -144,7 +144,9 @@ SCHEMA = [
         invoice_prefix TEXT NOT NULL DEFAULT 'SDF',
         gst_enabled INTEGER NOT NULL DEFAULT 1,
         bank_details TEXT DEFAULT '',
-        terms TEXT DEFAULT ''
+        terms TEXT DEFAULT '',
+        admin_hash TEXT DEFAULT '',
+        admin_salt TEXT DEFAULT ''
     )""",
     """CREATE TABLE IF NOT EXISTS items (
         id {PK},
@@ -188,7 +190,9 @@ SCHEMA = [
         total {NUM} NOT NULL DEFAULT 0,
         payment_mode TEXT DEFAULT 'Cash',
         notes TEXT DEFAULT '',
-        created_at TEXT NOT NULL DEFAULT ''
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        edit_count INTEGER NOT NULL DEFAULT 0
     )""",
     """CREATE TABLE IF NOT EXISTS purchase_lines (
         id {PK},
@@ -223,7 +227,9 @@ SCHEMA = [
         cogs {NUM} NOT NULL DEFAULT 0,
         payment_mode TEXT DEFAULT 'Cash',
         notes TEXT DEFAULT '',
-        created_at TEXT NOT NULL DEFAULT ''
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        edit_count INTEGER NOT NULL DEFAULT 0
     )""",
     """CREATE TABLE IF NOT EXISTS sale_lines (
         id {PK},
@@ -261,10 +267,45 @@ SEED_ITEMS = [
 ]
 
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS leaves an
+# existing table alone, so these are applied by hand on every start.
+MIGRATIONS = [
+    ("settings", "admin_hash", "TEXT DEFAULT ''"),
+    ("settings", "admin_salt", "TEXT DEFAULT ''"),
+    ("sales", "updated_at", "TEXT DEFAULT ''"),
+    ("sales", "edit_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("purchases", "updated_at", "TEXT DEFAULT ''"),
+    ("purchases", "edit_count", "INTEGER NOT NULL DEFAULT 0"),
+]
+
+
+def existing_columns(conn, table):
+    if IS_PG:
+        rows = conn.query(
+            "SELECT column_name AS name FROM information_schema.columns WHERE table_name = ?",
+            (table,))
+    else:
+        rows = conn.query("PRAGMA table_info({})".format(table))
+    return {r["name"] for r in rows}
+
+
+def migrate(conn):
+    """Add any column a newer version expects but an older database lacks."""
+    by_table = {}
+    for table, col, ddl in MIGRATIONS:
+        by_table.setdefault(table, []).append((col, ddl))
+    for table, cols in by_table.items():
+        have = existing_columns(conn, table)
+        for col, ddl in cols:
+            if col not in have:
+                conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, col, ddl))
+
+
 def init_db():
     with get_db() as conn:
         for stmt in SCHEMA:
             conn.execute(stmt.format(PK=PK, NUM=NUM))
+        migrate(conn)
         row = conn.query_one("SELECT id FROM settings WHERE id = 1")
         if not row:
             conn.execute("INSERT INTO settings (id) VALUES (1)")

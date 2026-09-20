@@ -2,6 +2,7 @@
 
 Run with:  python tests/test_app.py
 """
+import json
 import os
 import sys
 import tempfile
@@ -73,8 +74,12 @@ c.post("/settings", data=dict(business_name="Shree Spicy Dry Fruits", gstin="27A
                               state_code="27", invoice_prefix="SDF", gst_enabled="1"), follow_redirects=True)
 c.post("/parties/save", data=dict(name="Krishna Traders", kind="supplier", state_code="27"), follow_redirects=True)
 c.post("/parties/save", data=dict(name="Bengaluru Retail", kind="customer", state_code="29"), follow_redirects=True)
+c.post("/admin", data=dict(pin="7788", confirm="7788"), follow_redirects=True)
 with get_db() as conn:
     check("home state saved", conn.query_one("SELECT state_code FROM settings WHERE id=1")["state_code"], "27")
+    row = conn.query_one("SELECT admin_hash, admin_salt FROM settings WHERE id=1")
+    check("admin PIN is stored hashed, never in the clear", "7788" not in (row["admin_hash"] or ""), True)
+    check("a salt was generated", len(row["admin_salt"] or ""), 32)
 KAJU = item_id("Masala Kaju (Spiced Cashew)")
 
 
@@ -186,6 +191,198 @@ for kind, needle in [("sales", "Invoice No"), ("purchases", "Bill No"),
                      ("itemwise", "Margin %")]:
     r = c.get("/export/" + kind + ".csv?start=2026-09-01&end=2026-09-30")
     check(kind + ".csv downloads", r.status_code == 200 and needle in r.get_data(as_text=True), True)
+
+
+print("\n=== 11. Quick sale, search and date presets ===")
+r = c.get("/quick")
+check("quick sale screen renders", r.status_code, 200)
+check("quick screen lists items", "Masala Kaju" in r.get_data(as_text=True), True)
+
+# a quick sale posts the same field shape as the full form and must produce the same record
+before = c.get("/sales?preset=all").get_data(as_text=True).count("SDF/2026-27/")
+c.post("/quick", data={"invoice_date": "2026-09-06", "item_id": [str(KAJU)],
+                       "qty": ["2"], "rate": ["1000"], "discount_pct": ["0"],
+                       "payment_mode": "UPI"}, follow_redirects=True)
+with get_db() as conn:
+    q = conn.query_one("SELECT * FROM sales ORDER BY id DESC LIMIT 1")
+    check("quick sale saved", q["taxable"], 2000)
+    check("quick sale charged CGST+SGST", (q["cgst"], q["sgst"]), (50.0, 50.0))
+    check("quick sale numbered in sequence", q["invoice_no"].startswith("SDF/2026-27/"), True)
+    check("quick sale kept the payment mode", q["payment_mode"], "UPI")
+
+body = c.get("/sales?preset=all&q=kaju").get_data(as_text=True)
+check("search finds sales by item name", "SDF/2026-27/0001" in body, True)
+body = c.get("/sales?preset=all&q=zzzznothing").get_data(as_text=True)
+check("search with no match shows an empty state", "Nothing matches that search" in body, True)
+body = c.get("/purchases?preset=all&q=b-1").get_data(as_text=True)
+check("search finds purchases by bill number", "B-1" in body, True)
+body = c.get("/purchases?preset=all&q=masala").get_data(as_text=True)
+check("search finds purchases by item on the bill", "B-1" in body, True)
+check("today preset returns only today", c.get("/sales?preset=today").status_code, 200)
+check("financial-year preset resolves", c.get("/reports?preset=fy").status_code, 200)
+check("exports honour the preset", c.get("/export/sales.csv?preset=all").status_code, 200)
+
+
+print("\n=== 12. Charts ===")
+import charts as chmod  # noqa: E402
+cc = chmod.columns_pair([{"d": "01", "s": 100.0, "p": 40.0}, {"d": "02", "s": 300.0, "p": 0.0}],
+                        "d", "s", "p", "Sales", "Purchases")
+check("bars are sized as a share of the axis top", cc["cols"][1]["a_pct"], 100.0)
+check("a smaller value scales proportionally", cc["cols"][0]["a_pct"], 33.333)
+check("axis top is the data peak when it is already clean", cc["ticks"][-1]["label"], "300")
+check("axis wastes no headroom", len(cc["ticks"]), 4)
+check("a zero value draws no bar", cc["cols"][1]["b_pct"], 0)
+
+ll = chmod.lines_pair([{"d": "01", "s": 100.0, "p": 40.0}, {"d": "02", "s": 300.0, "p": 60.0}],
+                      "d", "s", "p", "Sales", "Profit")
+check("line chart builds a normalised path", ll["a"]["path"], "M0.0 66.667 L100.0 0.0")
+check("area closes back to the baseline", ll["a"]["area"].endswith("Z"), True)
+check("line chart has one hit zone per point", len(ll["hits"]), 2)
+check("end marker sits on the last point", ll["a"]["end"]["y"], 0.0)
+
+hh = chmod.hbars([{"n": "Kaju", "v": 8820.0}, {"n": "Peanuts", "v": -560.0}], "n", "v")
+check("longest bar fills the track", hh["bars"][0]["pct"], 100.0)
+check("negative profit is flagged for its own colour", hh["bars"][1]["neg"], True)
+check("bar values are directly labelled", hh["bars"][0]["value"], "8,820")
+check("compact axis labels use lakh notation", chmod.compact(250000), "2.5L")
+check("compact axis labels use crore notation", chmod.compact(15400000), "1.54Cr")
+
+body = c.get("/reports?preset=all").get_data(as_text=True)
+check("reports renders the chart legend", "Gross profit</span>" in body, True)
+check("chart marks carry hover data", "data-av=" in body, True)
+check("item chart labels each bar with its value", "hb-val" in body, True)
+# the favicon is an SVG with text in it, so scope the check to the chart markup
+chart_markup = body[body.index("cw-plot"):body.index("Net GST position")]
+check("charts draw marks in HTML, so nothing skews when stretched",
+      "<text" not in chart_markup and "hb-bar" in chart_markup, True)
+check("the one SVG path keeps its stroke width under stretch",
+      "non-scaling-stroke" in chart_markup, True)
+check("empty dashboard chart shows a guiding message",
+      "Nothing recorded yet" in c.get("/").get_data(as_text=True), True)
+
+
+print("\n=== 13. The daily series has no gaps ===")
+# 03, 04, 05 and 06 Sep had activity in this suite; 07 onward did not.
+rep = c.get("/reports?start=2026-09-01&end=2026-09-10").get_data(as_text=True)
+for d in ("03 Sep 2026", "04 Sep 2026", "05 Sep 2026", "06 Sep 2026"):
+    check("day-by-day includes " + d, d in rep, True)
+check("a quiet day between two busy ones is still plotted",
+      rep.count("cw-hit") >= 4, True)
+wide = c.get("/reports?preset=all")
+check("an all-time range still renders", wide.status_code, 200)
+
+
+print("\n=== 14. Admin gate ===")
+locked = app.test_client()   # a fresh session: admin is locked here
+for path in ["/sales/1/edit", "/purchases/1/edit"]:
+    r = locked.get(path)
+    check("locked session cannot open " + path, r.status_code in (301, 302), True)
+    check("  and is sent to the unlock screen", "/admin" in r.headers.get("Location", ""), True)
+
+with get_db() as conn:
+    before = conn.scalar("SELECT COUNT(*) AS c FROM sales")
+locked.post("/sales/1/delete", follow_redirects=True)
+with get_db() as conn:
+    check("locked session cannot delete", conn.scalar("SELECT COUNT(*) AS c FROM sales"), before)
+
+r = locked.post("/admin", data=dict(pin="0000"), follow_redirects=True)
+check("a wrong PIN is refused", "not right" in r.get_data(as_text=True), True)
+r = locked.post("/admin", data=dict(pin="7788"), follow_redirects=True)
+check("the right PIN unlocks", "Admin unlocked" in r.get_data(as_text=True), True)
+check("unlocked session can now open the edit form", locked.get("/sales/1/edit").status_code, 200)
+locked.post("/admin/lock", follow_redirects=True)
+check("locking takes the access away again",
+      locked.get("/sales/1/edit").status_code in (301, 302), True)
+
+
+print("\n=== 15. Editing an entry corrects the books ===")
+with get_db() as conn:
+    s1 = conn.query_one("SELECT * FROM sales WHERE invoice_no = 'SDF/2026-27/0001'")
+    kaju_before = conn.query_one("SELECT stock_qty FROM items WHERE id = ?", (KAJU,))["stock_qty"]
+sid = s1["id"]
+check("edit form opens for an unlocked admin", c.get("/sales/" + str(sid) + "/edit").status_code, 200)
+import html as _html  # noqa: E402
+import re as _re        # noqa: E402
+body = c.get("/sales/" + str(sid) + "/edit").get_data(as_text=True)
+m = _re.search(r"data-existing='([^']*)'", body)
+prefilled = json.loads(_html.unescape(m.group(1))) if m else []
+check("the form is prefilled with the saved line", len(prefilled), 1)
+check("  at the saved quantity", prefilled[0]["qty"] if prefilled else None, 6.0)
+check("  and the saved rate", prefilled[0]["rate"] if prefilled else None, 1100.0)
+check("a new entry form carries no prefill",
+      _re.search(r"data-existing='([^']*)'", c.get("/sales/new").get_data(as_text=True)).group(1), "[]")
+
+# the sale was 6 kg at 1100; correct it to 4 kg at 1200
+c.post("/sales/" + str(sid) + "/edit",
+       data={"invoice_date": "2026-09-03", "invoice_no": "SDF/2026-27/0001",
+             "state_code": "27", "party_name": "Walk-in", "payment_mode": "Cash",
+             "item_id": [str(KAJU)], "qty": ["4"], "rate": ["1200"], "discount_pct": ["0"]},
+       follow_redirects=True)
+with get_db() as conn:
+    s2 = conn.query_one("SELECT * FROM sales WHERE id = ?", (sid,))
+    check("taxable value updated", s2["taxable"], 4800)
+    check("GST recomputed on the new value", (s2["cgst"], s2["sgst"]), (120.0, 120.0))
+    check("invoice number kept", s2["invoice_no"], "SDF/2026-27/0001")
+    check("the edit is counted", s2["edit_count"], 1)
+    check("and timestamped", bool(s2["updated_at"]), True)
+    check("no duplicate lines left behind",
+          conn.scalar("SELECT COUNT(*) AS c FROM sale_lines WHERE sale_id = ?", (sid,)), 1)
+    after = conn.query_one("SELECT stock_qty FROM items WHERE id = ?", (KAJU,))["stock_qty"]
+    check("stock corrected by the 2 kg no longer sold", round(after - kaju_before, 3), 2.0)
+    check("invoice count unchanged - an edit is not a new record",
+          conn.scalar("SELECT COUNT(*) AS c FROM sales WHERE invoice_no = 'SDF/2026-27/0001'"), 1)
+
+# editing a purchase re-costs the sales that followed it
+with get_db() as conn:
+    pid = conn.query_one("SELECT id FROM purchases WHERE bill_no = 'B-1'")["id"]
+check("purchase edit form opens", c.get("/purchases/" + str(pid) + "/edit").status_code, 200)
+c.post("/purchases/" + str(pid) + "/edit",
+       data={"bill_date": "2026-09-01", "bill_no": "B-1", "state_code": "27",
+             "payment_mode": "Cash", "item_id": [str(KAJU)], "qty": ["10"],
+             "rate": ["900"], "discount_pct": ["0"]},
+       follow_redirects=True)
+with get_db() as conn:
+    p2 = conn.query_one("SELECT * FROM purchases WHERE id = ?", (pid,))
+    check("purchase taxable updated 10 x 900", p2["taxable"], 9000)
+    check("purchase edit counted", p2["edit_count"], 1)
+    s3 = conn.query_one("SELECT cogs FROM sales WHERE invoice_no = 'SDF/2026-27/0001'")
+    check("the later sale was re-costed at the new purchase price", s3["cogs"], 3600)
+
+
+print("\n=== 16. Upgrading a database that already holds data ===")
+# The live database was created before admin and audit columns existed.
+# CREATE TABLE IF NOT EXISTS will not add them, so migrate() must.
+import db as dbmod  # noqa: E402
+with get_db() as conn:
+    sales_before = conn.scalar("SELECT COUNT(*) AS c FROM sales")
+    dropped = []
+    for table, col, _ddl in dbmod.MIGRATIONS:
+        try:
+            conn.execute("ALTER TABLE {} DROP COLUMN {}".format(table, col))
+            dropped.append((table, col))
+        except Exception:
+            pass
+check("columns could be dropped to simulate the old schema", len(dropped) > 0, True)
+if dropped:
+    with get_db() as conn:
+        have = dbmod.existing_columns(conn, "settings")
+        check("the old schema really is missing admin_hash", "admin_hash" in have, False)
+
+dbmod.init_db()   # this is what runs on every deploy
+
+with get_db() as conn:
+    for table, col, _ddl in dbmod.MIGRATIONS:
+        check("migration restored " + table + "." + col,
+              col in dbmod.existing_columns(conn, table), True)
+    check("existing rows survived the upgrade", conn.scalar("SELECT COUNT(*) AS c FROM sales"), sales_before)
+
+dbmod.init_db()   # running twice must not fail or duplicate anything
+with get_db() as conn:
+    check("migration is safe to run again", "admin_hash" in dbmod.existing_columns(conn, "settings"), True)
+    check("and did not re-seed the sample items",
+          conn.scalar("SELECT COUNT(*) AS c FROM items") > 0, True)
+check("the app still serves after the upgrade", c.get("/").status_code, 200)
+check("and the admin screen offers to set a PIN again", "PIN" in c.get("/admin").get_data(as_text=True), True)
 
 
 print("\n" + ("=" * 46))

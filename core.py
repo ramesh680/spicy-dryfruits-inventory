@@ -1,4 +1,7 @@
 """Business logic: GST computation, stock valuation, invoice numbering."""
+import hashlib
+import hmac
+import os
 from datetime import date, datetime
 
 from db import get_db
@@ -244,3 +247,30 @@ def amount_in_words(amount):
     if paise:
         out += " and " + _two(paise) + " Paise"
     return out + " Only"
+
+
+# ------------------------------------------------------------ admin access
+
+PIN_ROUNDS = 240000
+
+
+def make_pin(pin):
+    """Hash an admin PIN. The PIN itself is never stored."""
+    salt = os.urandom(16).hex()
+    return hash_pin(pin, salt), salt
+
+
+def hash_pin(pin, salt):
+    return hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"),
+                               bytes.fromhex(salt), PIN_ROUNDS).hex()
+
+
+def check_pin(pin, stored_hash, salt):
+    """Constant-time check, so a wrong PIN cannot be found by timing."""
+    if not pin or not stored_hash or not salt:
+        return False
+    try:
+        candidate = hash_pin(pin, salt)
+    except ValueError:
+        return False
+    return hmac.compare_digest(candidate, stored_hash)

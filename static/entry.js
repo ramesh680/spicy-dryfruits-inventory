@@ -11,6 +11,7 @@
   var PARTY_STATES = JSON.parse(root.dataset.partyStates || '{}');
   var USE_SALE_RATE = root.dataset.useSaleRate === '1';
 
+  var EXISTING = JSON.parse(root.dataset.existing || '[]');
   var body = document.getElementById('lines');
   var tpl = document.getElementById('line-tpl');
 
@@ -36,12 +37,24 @@
     return code !== HOME_STATE;
   }
 
-  function addRow(preselect) {
+  function addRow(preselect, values) {
     var node = tpl.content.cloneNode(true);
     body.appendChild(node);
     var row = body.lastElementChild;
     var sel = row.querySelector('.f-item');
-    if (preselect) sel.value = preselect;
+    if (preselect) {
+      sel.value = String(preselect);
+      var it = BY_ID[String(preselect)];
+      if (it) {
+        row.querySelector('.f-unit').textContent = it.unit;
+        row.querySelector('.f-gst').textContent = GST_ON ? it.gst_rate + '%' : '--';
+      }
+    }
+    if (values) {
+      row.querySelector('.f-qty').value = values.qty;
+      row.querySelector('.f-rate').value = values.rate;
+      row.querySelector('.f-disc').value = values.discount_pct;
+    }
     row.querySelector('.f-del').addEventListener('click', function () {
       row.remove();
       if (!body.children.length) addRow();
@@ -127,6 +140,12 @@
   var sc = document.getElementById('state_code');
   if (sc) sc.addEventListener('change', recalc);
 
-  addRow(); addRow();
+  if (EXISTING.length) {
+    // editing: rebuild the invoice exactly as it was saved
+    EXISTING.forEach(function (l) { addRow(l.item_id, l); });
+    addRow();
+  } else {
+    addRow(); addRow();
+  }
   recalc();
 })();

@@ -5,9 +5,14 @@
     <p>{{ doc.party_name }} &middot; {{ doc.bill_date|dmy }} &middot; {{ STATE_NAME.get(doc.state_code, doc.state_code) }}</p></div>
   <div class="actions">
     <a class="btn" href="{{ url_for('purchases') }}">Back to register</a>
+    {% if is_admin %}
+    <a class="btn" href="{{ url_for('purchase_edit', pid=doc.id) }}">Edit</a>
     <form method="post" action="{{ url_for('purchase_delete', pid=doc.id) }}" class="inline"
-          onsubmit="return confirm('Delete this bill? Stock and costing will be recalculated.')">
+          onsubmit="return confirm('Delete this bill? Stock and costing will be recalculated. This cannot be undone.')">
       <button class="btn danger" type="submit">Delete</button></form>
+    {% else %}
+    <a class="btn" href="{{ url_for('admin', next=request.full_path) }}">Unlock to edit</a>
+    {% endif %}
   </div>
 </div>
 

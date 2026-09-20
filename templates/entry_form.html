@@ -8,6 +8,7 @@
 <form method="post" id="entry"
       data-items='{{ items_json }}'
       data-party-states='{{ party_states_json }}'
+      data-existing='{{ existing_json or "[]" }}'
       data-home-state="{{ s.state_code }}"
       data-gst-enabled="{{ 1 if s.gst_enabled else 0 }}"
       data-use-sale-rate="{{ 1 if use_sale_rate else 0 }}">
@@ -16,7 +17,7 @@
     <div class="row r3">
       <div class="field">
         <label for="{{ date_field }}">{{ date_label }}</label>
-        <input type="date" id="{{ date_field }}" name="{{ date_field }}" value="{{ today }}" required>
+        <input type="date" id="{{ date_field }}" name="{{ date_field }}" value="{{ date_value or today }}" required>
       </div>
       <div class="field">
         <label for="{{ no_field }}">{{ no_label }}</label>
@@ -26,25 +27,27 @@
         <label for="party_id">{{ party_label }}</label>
         <select id="party_id" name="party_id">
           <option value="">{{ walkin_label }}</option>
-          {% for p in parties %}<option value="{{ p.id }}">{{ p.name }}{% if p.gstin %} &middot; {{ p.gstin }}{% endif %}</option>{% endfor %}
+          {% for p in parties %}<option value="{{ p.id }}" {{ 'selected' if doc and doc.party_id == p.id }}>{{ p.name }}{% if p.gstin %} &middot; {{ p.gstin }}{% endif %}</option>{% endfor %}
         </select>
       </div>
     </div>
     <div class="row r3">
       <div class="field">
         <label for="party_name">{{ walkin_name_label }}</label>
-        <input type="text" id="party_name" name="party_name" placeholder="{{ walkin_placeholder }}">
+        <input type="text" id="party_name" name="party_name" placeholder="{{ walkin_placeholder }}"
+               value="{{ doc.party_name if doc and not doc.party_id else '' }}">
       </div>
       <div class="field" id="manual-state">
         <label for="state_code">Place of supply</label>
         <select id="state_code" name="state_code">
-          {% for code, name in STATE_CODES %}<option value="{{ code }}" {{ 'selected' if code == s.state_code }}>{{ code }} &ndash; {{ name }}</option>{% endfor %}
+          {% set sel = doc.state_code if doc else s.state_code %}
+          {% for code, name in STATE_CODES %}<option value="{{ code }}" {{ 'selected' if code == sel }}>{{ code }} &ndash; {{ name }}</option>{% endfor %}
         </select>
       </div>
       <div class="field">
         <label for="payment_mode">Payment</label>
         <select id="payment_mode" name="payment_mode">
-          {% for m in PAYMENT_MODES %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+          {% for m in PAYMENT_MODES %}<option value="{{ m }}" {{ 'selected' if doc and doc.payment_mode == m }}>{{ m }}</option>{% endfor %}
         </select>
       </div>
     </div>
@@ -75,7 +78,7 @@
     <div class="card">
       <div class="field">
         <label for="notes">Notes</label>
-        <textarea id="notes" name="notes" placeholder="Vehicle number, transport, remarks..."></textarea>
+        <textarea id="notes" name="notes" placeholder="Vehicle number, transport, remarks...">{{ doc.notes if doc else '' }}</textarea>
       </div>
       <p class="small muted" id="t-breakup"></p>
     </div>

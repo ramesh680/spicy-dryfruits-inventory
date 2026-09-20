@@ -13,6 +13,12 @@ Record a purchase bill or a sale in one screen. Pick the item, type the quantity
 and rate, and the tax, line totals and bill total update as you type. Each item
 carries its own GST rate and HSN code, so you never enter tax by hand.
 
+**Quick sale**
+A counter screen for the common walk-in: tap an item tile, type the weight, save.
+The rate comes from the item, stock on hand is shown on every tile, and the
+running total sits pinned at the bottom of the screen. It writes exactly the same
+record as the full invoice form, so nothing is second-class about a quick sale.
+
 **GST, done properly**
 - Intra-state supply splits into **CGST + SGST** (half the rate each).
 - Inter-state supply is charged as **IGST** at the full rate.
@@ -37,6 +43,31 @@ it; the net GST payable; profit by item; and a day-by-day table. Everything
 exports to CSV for your accountant — sales register, purchase register, stock,
 GST summary and item-wise profit.
 
+**Searchable registers**
+Both registers take a search term - invoice or bill number, customer or supplier
+name, payment mode, or any item on the document - alongside date presets for
+today, this week, this month, this financial year, or all time. The CSV exports
+follow whatever range you are looking at.
+
+**Charts**
+The dashboard plots the last fourteen days of sales against purchases; reports
+plot sales against gross profit day by day, and rank profit by item. Marks are
+drawn in HTML rather than stretched SVG, so bar caps and label type stay crisp at
+any width, and every chart has a hover and keyboard-focus readout.
+
+**Correcting mistakes, behind an admin PIN**
+A wrong entry or a test record can be edited or deleted. Both are gated by an
+admin PIN so a slip at the counter cannot quietly rewrite the books: recording
+new sales and purchases never asks for it, changing or removing one always does.
+Editing opens the original bill with its lines intact; saving replays the whole
+ledger, so stock, weighted-average cost and the cost of every later sale are all
+recomputed. Each edit is counted and timestamped on the record.
+
+Set the PIN the first time you open **Unlock admin** in the sidebar. It is stored
+as a salted PBKDF2 hash - the database never holds the PIN itself - and can be
+changed from Settings while unlocked. Locking is one click, for when you hand the
+device to someone else.
+
 **Printable GST invoices**
 Every sale gets a numbered tax invoice with your GSTIN and address, the
 customer's details, HSN codes, the per-rate tax breakup, amount in words, bank
@@ -55,6 +86,11 @@ python app.py
 
 Open http://localhost:5000. A SQLite database is created at `data/inventory.db`
 on first run, seeded with eight sample items you can rename, edit or archive.
+
+The interface is dark by default with a light theme one click away (the toggle
+sits at the foot of the sidebar); the choice is remembered per browser. On a
+phone the sidebar collapses to a top bar with a menu, and the five screens you
+reach for at the counter move to a bottom tab bar.
 
 Run the checks with:
 
@@ -88,7 +124,7 @@ for real trading data.
 | --- | --- | --- |
 | `DATABASE_URL` | PostgreSQL URL. Unset means SQLite. | unset |
 | `SQLITE_PATH` | Where the SQLite file lives. | `data/inventory.db` |
-| `SECRET_KEY` | Flask session signing. Set a real one in production. | `dev-secret-change-me` |
+| `SECRET_KEY` | Signs the session cookie that carries admin unlock. Set a real one in production - the blueprint generates it. | `dev-secret-change-me` |
 | `PORT` | Port to bind. | `5000` |
 
 ## First-time setup
@@ -117,12 +153,14 @@ e-invoicing and e-way bill rules. This is a bookkeeping tool, not a filing tool.
 ## How it is put together
 
 ```
-app.py              routes, CSV exports, template filters
+app.py              routes, CSV exports, search and date presets, template filters
 core.py             GST maths, weighted-average costing, invoice numbering,
-                    amount-in-words, state codes
-db.py               schema and a thin layer that speaks both SQLite and Postgres
-templates/          Jinja templates, including the printable invoice
-static/             stylesheet (light and dark) and the entry-form script
+                    amount-in-words, state codes, admin PIN hashing
+charts.py           chart geometry as percentages, axis ticks, compact formatting
+db.py               schema, migrations, and a thin layer that speaks both
+                    SQLite and Postgres
+templates/          Jinja templates; _icons, _charts and _filters hold the macros
+static/             design tokens and stylesheet, entry-form and chart scripts
 tests/test_app.py   end-to-end checks
 render.yaml         Render blueprint: web service + Postgres
 ```

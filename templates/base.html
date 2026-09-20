@@ -1,36 +1,126 @@
+{% import "_icons.html" as icons %}
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0c0e11">
 <title>{% block title %}{{ s.business_name }}{% endblock %}</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127792;</text></svg>">
+<script>
+  // Set the theme before first paint so there is no flash of the wrong one.
+  (function () {
+    try {
+      var t = localStorage.getItem('sdf-theme');
+      if (!t) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  })();
+</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=2">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%8C%B0</text></svg>">
 </head>
 <body>
-<header class="top">
-  <div class="top-in">
-    <a class="brand" href="{{ url_for('dashboard') }}"><span class="dot">&#9679;</span>{{ s.business_name }}</a>
-    <nav>
-      <a href="{{ url_for('dashboard') }}" class="{{ 'on' if request.endpoint=='dashboard' }}">Dashboard</a>
-      <a href="{{ url_for('purchase_new') }}" class="{{ 'on' if request.endpoint=='purchase_new' }}">+ Buy</a>
-      <a href="{{ url_for('sale_new') }}" class="{{ 'on' if request.endpoint=='sale_new' }}">+ Sell</a>
-      <a href="{{ url_for('stock') }}" class="{{ 'on' if request.endpoint=='stock' }}">Stock</a>
-      <a href="{{ url_for('purchases') }}" class="{{ 'on' if request.endpoint in ('purchases','purchase_view') }}">Purchases</a>
-      <a href="{{ url_for('sales') }}" class="{{ 'on' if request.endpoint in ('sales','invoice') }}">Sales</a>
-      <a href="{{ url_for('reports') }}" class="{{ 'on' if request.endpoint=='reports' }}">Reports</a>
-      <a href="{{ url_for('items') }}" class="{{ 'on' if request.endpoint=='items' }}">Items</a>
-      <a href="{{ url_for('parties') }}" class="{{ 'on' if request.endpoint=='parties' }}">Contacts</a>
-      <a href="{{ url_for('settings') }}" class="{{ 'on' if request.endpoint=='settings' }}">Settings</a>
-    </nav>
+{{ icons.sprite() }}
+{% set ep = request.endpoint %}
+<div class="shell">
+
+  <aside class="side">
+    <a class="brand" href="{{ url_for('dashboard') }}">
+      <span class="mark">{{ (s.business_name or 'S')[:1]|upper }}</span>
+      <span>{{ s.business_name }}</span>
+    </a>
+
+    <div class="nav-label">Overview</div>
+    <a class="nav {{ 'on' if ep=='dashboard' }}" href="{{ url_for('dashboard') }}">{{ icons.ic('home') }} Dashboard</a>
+    <a class="nav {{ 'on' if ep=='stock' }}" href="{{ url_for('stock') }}">{{ icons.ic('box') }} Stock</a>
+
+    <div class="nav-label">Record</div>
+    <a class="nav {{ 'on' if ep=='quick' }}" href="{{ url_for('quick') }}">{{ icons.ic('bolt') }} Quick sale</a>
+    <a class="nav {{ 'on' if ep=='sale_new' }}" href="{{ url_for('sale_new') }}">{{ icons.ic('tag') }} Full invoice</a>
+    <a class="nav {{ 'on' if ep=='purchase_new' }}" href="{{ url_for('purchase_new') }}">{{ icons.ic('cart') }} New purchase</a>
+
+    <div class="nav-label">Books</div>
+    <a class="nav {{ 'on' if ep in ('sales','invoice') }}" href="{{ url_for('sales') }}">{{ icons.ic('receipt') }} Sales</a>
+    <a class="nav {{ 'on' if ep in ('purchases','purchase_view') }}" href="{{ url_for('purchases') }}">{{ icons.ic('list') }} Purchases</a>
+    <a class="nav {{ 'on' if ep=='reports' }}" href="{{ url_for('reports') }}">{{ icons.ic('chart') }} Reports</a>
+
+    <div class="nav-label">Setup</div>
+    <a class="nav {{ 'on' if ep=='items' }}" href="{{ url_for('items') }}">{{ icons.ic('box') }} Items</a>
+    <a class="nav {{ 'on' if ep=='parties' }}" href="{{ url_for('parties') }}">{{ icons.ic('users') }} Contacts</a>
+    <a class="nav {{ 'on' if ep=='settings' }}" href="{{ url_for('settings') }}">{{ icons.ic('gear') }} Settings</a>
+
+    <div class="spacer"></div>
+    {% if is_admin %}
+      <form method="post" action="{{ url_for('admin_lock') }}" class="admin-chip">
+        <span class="badge b-green"><span class="dot" style="background:currentColor"></span>Admin</span>
+        <button class="btn sm" type="submit">Lock</button>
+      </form>
+    {% else %}
+      <a class="nav" href="{{ url_for('admin', next=request.full_path) }}">{{ icons.ic('gear') }} Unlock admin</a>
+    {% endif %}
+    <button class="theme-btn" id="theme-btn" type="button" title="Switch theme" aria-label="Switch between dark and light">
+      {{ icons.ic('sun', 15) }}
+    </button>
+    <button class="menu-btn" id="menu-btn" type="button" aria-label="Show all sections" aria-expanded="false">
+      {{ icons.ic('menu', 16) }}
+    </button>
+    <a class="cta" href="{{ url_for('quick') }}">{{ icons.ic('bolt', 16) }} Quick sale</a>
+  </aside>
+
+  <div class="mainwrap">
+    <main>
+      {% with msgs = get_flashed_messages(with_categories=true) %}
+        {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+      {% endwith %}
+      {% block body %}{% endblock %}
+    </main>
   </div>
-</header>
-<main>
-  {% with msgs = get_flashed_messages(with_categories=true) %}
-    {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
-  {% endwith %}
-  {% block body %}{% endblock %}
-</main>
+</div>
+
+<nav class="tabbar">
+  <a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep=='dashboard' }}">{{ icons.ic('home', 20) }}Home</a>
+  <a href="{{ url_for('quick') }}" class="{{ 'on' if ep=='quick' }}">{{ icons.ic('bolt', 20) }}Sell</a>
+  <a href="{{ url_for('purchase_new') }}" class="{{ 'on' if ep=='purchase_new' }}">{{ icons.ic('cart', 20) }}Buy</a>
+  <a href="{{ url_for('stock') }}" class="{{ 'on' if ep=='stock' }}">{{ icons.ic('box', 20) }}Stock</a>
+  <a href="{{ url_for('reports') }}" class="{{ 'on' if ep in ('reports','sales','purchases','items','parties','settings') }}">{{ icons.ic('chart', 20) }}More</a>
+</nav>
+
+<div class="tip" id="tip" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  var btn = document.getElementById('theme-btn');
+  if (!btn) return;
+  function paint() {
+    var dark = document.documentElement.getAttribute('data-theme') !== 'light';
+    btn.innerHTML = '<svg class="ic" width="15" height="15" viewBox="0 0 20 20" fill="currentColor"><use href="#i-'
+      + (dark ? 'sun' : 'moon') + '"/></svg>';
+    btn.title = dark ? 'Switch to light' : 'Switch to dark';
+  }
+  paint();
+  btn.addEventListener('click', function () {
+    var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('sdf-theme', next); } catch (e) {}
+    paint();
+  });
+})();
+</script>
+<script>
+(function () {
+  var mb = document.getElementById('menu-btn'), side = document.querySelector('.side');
+  if (!mb || !side) return;
+  mb.addEventListener('click', function () {
+    var open = side.classList.toggle('open');
+    mb.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  document.querySelectorAll('.side a.nav').forEach(function (a) {
+    a.addEventListener('click', function () { side.classList.remove('open'); });
+  });
+})();
+</script>
+<script src="{{ url_for('static', filename='charts.js') }}?v=2"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

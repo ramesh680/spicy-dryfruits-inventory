@@ -1,11 +1,15 @@
 {% extends "base.html" %}
+{% import "_icons.html" as icons %}
 {% block body %}
 <div class="page-head">
-  <div><h1>Stock on hand</h1><p>Valued at weighted-average cost, recalculated from every purchase and sale.</p></div>
-  <div class="actions"><a class="btn" href="{{ url_for('export', kind='stock') }}">Export CSV</a><a class="btn primary" href="{{ url_for('purchase_new') }}">Record purchase</a></div>
+  <div><h1>Stock on hand</h1><p class="sub">Valued at weighted-average cost, recalculated from every purchase and sale.</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='stock') }}">{{ icons.ic('down', 15) }} CSV</a>
+    <a class="btn primary" href="{{ url_for('purchase_new') }}">{{ icons.ic('cart', 15) }} Record purchase</a>
+  </div>
 </div>
 
-<div class="grid g3" style="margin-bottom:1.1rem">
+<div class="grid g4" style="margin-bottom:1.1rem">
   <div class="stat accent"><div class="label">Total stock value</div><div class="value">&#8377;{{ total_value|inr }}</div><div class="note">at cost, excluding GST</div></div>
   <div class="stat"><div class="label">Items tracked</div><div class="value">{{ rows|length }}</div></div>
   <div class="stat {{ 'bad' if low_count else 'good' }}"><div class="label">Below reorder level</div><div class="value">{{ low_count }}</div></div>
@@ -13,22 +17,23 @@
 
 <div class="card">
   <div class="tw"><table>
-    <thead><tr><th>Item</th><th>HSN</th><th class="num">GST</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Value</th><th class="num">Sale rate</th><th class="num">Margin/unit</th><th>Status</th></tr></thead>
+    <thead><tr><th>Item</th><th>HSN</th><th class="num">GST</th><th class="num">Qty</th><th class="num">Avg cost</th>
+      <th class="num">Value</th><th class="num">Sale rate</th><th class="num">Margin/unit</th><th>Status</th></tr></thead>
     <tbody>
       {% for r in rows %}<tr>
-        <td>{{ r.name }}</td>
+        <td style="font-weight:550">{{ r.name }}</td>
         <td class="muted small">{{ r.hsn or '-' }}</td>
         <td class="num">{{ r.gst_rate|round(0)|int }}%</td>
-        <td class="num">{{ r.stock_qty|qty }} {{ r.unit }}</td>
+        <td class="num">{{ r.stock_qty|qty }} <span class="muted small">{{ r.unit }}</span></td>
         <td class="num">&#8377;{{ r.avg_cost|inr }}</td>
         <td class="num">&#8377;{{ r.stock_value|inr }}</td>
         <td class="num">&#8377;{{ r.sale_rate|inr }}</td>
-        <td class="num" style="color:{{ 'var(--green)' if r.sale_rate > r.avg_cost else 'var(--muted)' }}">
-          {% if r.sale_rate and r.avg_cost %}&#8377;{{ (r.sale_rate - r.avg_cost)|inr }}{% else %}-{% endif %}</td>
+        <td class="num" style="color:{{ 'var(--green)' if r.sale_rate > r.avg_cost else 'var(--text-3)' }}">
+          {% if r.sale_rate and r.avg_cost %}&#8377;{{ (r.sale_rate - r.avg_cost)|inr }}{% else %}&ndash;{% endif %}</td>
         <td>{% if r.stock_qty < 0 %}<span class="badge b-red">negative</span>
             {% elif r.low %}<span class="badge b-amber">reorder</span>
             {% else %}<span class="badge b-green">ok</span>{% endif %}</td>
-      </tr>{% else %}<tr><td colspan="9" class="empty">No items yet. Add them on the Items page.</td></tr>{% endfor %}
+      </tr>{% else %}<tr><td colspan="9" class="empty"><strong>No items yet</strong>Add your products on the Items page.</td></tr>{% endfor %}
     </tbody>
     <tfoot><tr><td colspan="5">Total</td><td class="num">&#8377;{{ total_value|inr }}</td><td colspan="3"></td></tr></tfoot>
   </table></div>

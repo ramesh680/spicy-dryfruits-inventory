@@ -36,6 +36,28 @@
 </form>
 
 <div class="card">
+  <h2>Admin access</h2>
+  <p class="sub">Editing and deleting entries needs this PIN. Recording new sales and purchases never does.</p>
+  {% if is_admin %}
+    <form method="post" action="{{ url_for('admin_pin') }}">
+      <div class="row r3">
+        <div class="field"><label for="current">Current PIN</label>
+          <input type="password" id="current" name="current" required autocomplete="current-password"></div>
+        <div class="field"><label for="newpin">New PIN</label>
+          <input type="password" id="newpin" name="pin" minlength="4" required autocomplete="new-password"></div>
+        <div class="field"><label for="confirm">Repeat new PIN</label>
+          <input type="password" id="confirm" name="confirm" minlength="4" required autocomplete="new-password"></div>
+      </div>
+      <button class="btn" type="submit">Change PIN</button>
+    </form>
+    <p class="note-line">Admin is unlocked in this browser. Use <strong>Lock</strong> at the foot of the sidebar when you hand the device to someone else.</p>
+  {% else %}
+    <p class="small muted" style="margin:0 0 .8rem">Admin is locked in this browser.</p>
+    <a class="btn primary" href="{{ url_for('admin', next=request.full_path) }}">Unlock admin</a>
+  {% endif %}
+</div>
+
+<div class="card">
   <h2>About GST rates</h2>
   <p class="small muted">Each item carries its own rate and HSN code, set on the Items page. The seeded items use 5%, the slab that plain and processed dry fruits and nuts fall under after the September 2025 rate revision. Confirm the current rate and HSN for your exact products with your accountant before you file.</p>
 </div>

@@ -6,7 +6,8 @@
     <p>Gross profit on this invoice: <strong style="color:{{ 'var(--green)' if profit >= 0 else 'var(--red)' }}">&#8377;{{ profit|inr }}</strong></p></div>
   <div class="actions">
     <a class="btn" href="{{ url_for('sales') }}">Back</a>
-    <a class="btn" href="{{ url_for('sale_new') }}">New sale</a>
+    {% if is_admin %}<a class="btn" href="{{ url_for('sale_edit', sid=doc.id) }}">Edit</a>
+    {% else %}<a class="btn" href="{{ url_for('admin', next=request.full_path) }}">Unlock to edit</a>{% endif %}
     <button class="btn primary" onclick="window.print()">Print / Save as PDF</button>
   </div>
 </div>
@@ -114,12 +115,12 @@
 
   {% if doc.notes %}<p style="font-size:.8rem;margin-top:.8rem"><strong>Notes:</strong> {{ doc.notes }}</p>{% endif %}
 
-  <div class="inv-meta" style="margin-top:1.2rem">
+  <div class="inv-meta inv-foot" style="margin-top:1rem">
     <div style="font-size:.78rem;color:#555;white-space:pre-line">
       {% if s.bank_details %}<strong>Bank details</strong>{{ '\n' }}{{ s.bank_details }}{{ '\n\n' }}{% endif %}
       {% if s.terms %}<strong>Terms</strong>{{ '\n' }}{{ s.terms }}{% endif %}
     </div>
-    <div style="text-align:right;font-size:.8rem;padding-top:2.5rem;color:#333">
+    <div style="text-align:right;font-size:.8rem;padding-top:1.4rem;color:#333">
       <div style="border-top:1px solid #999;display:inline-block;padding-top:.3rem;min-width:180px">
         For <strong>{{ s.business_name }}</strong><div style="color:#777;margin-top:.2rem">Authorised signatory</div>
       </div>

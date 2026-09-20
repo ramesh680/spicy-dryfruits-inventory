@@ -1,0 +1,97 @@
+{# Charts drawn as HTML marks, so bar caps and type stay crisp at any width.
+   Only the line path is SVG, and it carries no text. #}
+
+{% macro _empty(head, body) %}
+<div class="empty"><strong>{{ head }}</strong>{{ body }}</div>
+{% endmacro %}
+
+{% macro columns(c) %}
+{% if c.empty %}{{ _empty('Nothing recorded yet', 'Bills and invoices you save will chart here.') }}
+{% else %}
+<div class="cw">
+  <div class="cw-y">
+    {% for t in c.ticks %}<span style="bottom:{{ t.pct }}%">{{ t.label }}</span>{% endfor %}
+  </div>
+  <div class="cw-plot">
+    {% for t in c.ticks %}<i class="gl" style="bottom:{{ t.pct }}%"></i>{% endfor %}
+    <div class="cw-cols">
+      {% for col in c.cols %}
+      <div class="cw-col" tabindex="0" data-label="{{ col.label }}"
+           data-a="{{ c.a_name }}" data-av="{{ col.a_v }}"
+           data-b="{{ c.b_name }}" data-bv="{{ col.b_v }}">
+        <div class="cw-pair">
+          <span class="bar s" style="height:{{ col.a_pct }}%"></span>
+          <span class="bar p" style="height:{{ col.b_pct }}%"></span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+<div class="cw-x" style="--n:{{ c.cols|length }}">
+  {% for col in c.cols %}<span>{{ col.label if col.show_label }}</span>{% endfor %}
+</div>
+<div class="legend">
+  <span><i style="background:var(--s-sales)"></i>{{ c.a_name }}</span>
+  <span><i style="background:var(--s-purchases)"></i>{{ c.b_name }}</span>
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{% macro lines(c) %}
+{% if c.empty %}{{ _empty('No activity in this period', 'Pick a wider date range, or record a sale.') }}
+{% else %}
+<div class="cw">
+  <div class="cw-y">
+    {% for t in c.ticks %}<span style="bottom:{{ t.pct }}%">{{ t.label }}</span>{% endfor %}
+  </div>
+  <div class="cw-plot">
+    {% for t in c.ticks %}<i class="gl" style="bottom:{{ t.pct }}%"></i>{% endfor %}
+    <svg class="lw" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <path d="{{ c.a.area }}" fill="var(--s-sales)" opacity=".10"/>
+      <path d="{{ c.b.area }}" fill="var(--s-purchases)" opacity=".10"/>
+      <path d="{{ c.b.path }}" fill="none" stroke="var(--s-purchases)" stroke-width="2"
+            vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
+      <path d="{{ c.a.path }}" fill="none" stroke="var(--s-sales)" stroke-width="2"
+            vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>
+    {% if c.a.end %}
+      <i class="enddot s" style="left:{{ c.a.end.x }}%;top:{{ c.a.end.y }}%"></i>
+      <i class="enddot p" style="left:{{ c.b.end.x }}%;top:{{ c.b.end.y }}%"></i>
+    {% endif %}
+    <i class="xhair" id="xh" hidden></i>
+    <div class="cw-hits">
+      {% for h in c.hits %}
+      <div class="cw-hit" tabindex="0" data-cx="{{ h.x }}" data-label="{{ h.label }}"
+           data-a="{{ c.a_name }}" data-av="{{ h.a }}"
+           data-b="{{ c.b_name }}" data-bv="{{ h.b }}"></div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+<div class="cw-x" style="--n:{{ c.hits|length }}">
+  {% for h in c.hits %}<span>{{ h.label if h.show_label }}</span>{% endfor %}
+</div>
+<div class="legend">
+  <span><i style="background:var(--s-sales)"></i>{{ c.a_name }}</span>
+  <span><i style="background:var(--s-purchases)"></i>{{ c.b_name }}</span>
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{% macro hbars(c) %}
+{% if c.empty %}{{ _empty('Nothing sold in this period', 'Item profit shows here once you record a sale.') }}
+{% else %}
+<div class="hb">
+  {% for b in c.bars %}
+  <div class="hb-row" tabindex="0" data-label="{{ b.label }}" data-a="Profit" data-av="{{ b.v }}">
+    <span class="hb-name" title="{{ b.label }}">{{ b.label }}</span>
+    <span class="hb-track"><span class="hb-bar{{ ' neg' if b.neg }}" style="width:{{ b.pct }}%"></span></span>
+    <span class="hb-val">&#8377;{{ b.value }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}

@@ -1,0 +1,25 @@
+{% import "_icons.html" as icons %}
+{% macro rangebar(endpoint, presets, preset, start, end, q=None, placeholder='Search') %}
+<div class="card" style="padding:.8rem .9rem">
+  <div style="display:flex;gap:.7rem;flex-wrap:wrap;align-items:flex-end">
+    <div class="seg" role="group" aria-label="Date range">
+      {% for key, label in presets %}
+      <a href="{{ url_for(endpoint, preset=key, q=q or None) }}" class="{{ 'on' if preset == key }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <form method="get" style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:flex-end;flex:1;min-width:260px">
+      {% if q is not none %}
+      <div class="field" style="margin:0;flex:1;min-width:170px">
+        <label for="q">Search</label>
+        <input type="search" id="q" name="q" value="{{ q }}" placeholder="{{ placeholder }}">
+      </div>
+      {% endif %}
+      <div class="field" style="margin:0"><label for="start">From</label>
+        <input type="date" id="start" name="start" value="{{ start }}"></div>
+      <div class="field" style="margin:0"><label for="end">To</label>
+        <input type="date" id="end" name="end" value="{{ end }}"></div>
+      <button class="btn" type="submit">{{ icons.ic('search', 15) }} Apply</button>
+    </form>
+  </div>
+</div>
+{% endmacro %}
