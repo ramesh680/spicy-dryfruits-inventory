@@ -254,6 +254,10 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_s_date ON sales(invoice_date)",
 ]
 
+# Enforced separately: on a database that somehow already holds a duplicate
+# invoice number this cannot be created, and that must not stop the app booting.
+UNIQUE_INVOICE_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS idx_s_invoice_no ON sales(invoice_no)"
+
 SEED_ITEMS = [
     # name, hsn, gst_rate, unit, low_stock, sale_rate
     ("Masala Kaju (Spiced Cashew)", "2008", 5, "kg", 5, 1100),
@@ -316,3 +320,12 @@ def init_db():
                     name=name, hsn=hsn, gst_rate=rate, unit=unit,
                     low_stock_qty=low, sale_rate=srate, created_at="",
                 ))
+
+    # Its own transaction: on a database that somehow already holds a duplicate
+    # invoice number this cannot be created, and a failure here must not undo
+    # the migration above or stop the app booting.
+    try:
+        with get_db() as conn:
+            conn.execute(UNIQUE_INVOICE_INDEX)
+    except Exception:
+        pass

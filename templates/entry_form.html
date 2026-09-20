@@ -21,7 +21,13 @@
       </div>
       <div class="field">
         <label for="{{ no_field }}">{{ no_label }}</label>
-        <input type="text" id="{{ no_field }}" name="{{ no_field }}" value="{{ no_value }}" placeholder="{{ no_placeholder }}">
+        {% if no_readonly %}
+          <input type="text" id="{{ no_field }}" value="{{ no_value }}" readonly tabindex="-1"
+                 aria-describedby="{{ no_field }}-hint" class="readonly">
+          <p class="small muted" id="{{ no_field }}-hint" style="margin:.3rem 0 0">{{ no_hint }}</p>
+        {% else %}
+          <input type="text" id="{{ no_field }}" name="{{ no_field }}" value="{{ no_value }}" placeholder="{{ no_placeholder }}">
+        {% endif %}
       </div>
       <div class="field">
         <label for="party_id">{{ party_label }}</label>

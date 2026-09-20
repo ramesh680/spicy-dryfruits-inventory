@@ -187,19 +187,25 @@ def stock_rows(conn):
 # ------------------------------------------------------ invoice numbering
 
 def next_invoice_no(conn, invoice_date, prefix):
+    """Next number in the financial year the date falls in.
+
+    Numbering restarts each April and must not repeat, so this also skips over
+    any number already taken - two tills saving at the same moment, or a
+    back-dated entry, must never produce a duplicate.
+    """
     fy = fy_of(invoice_date)
-    start, end = fy_bounds(fy)
     pattern = "{}/{}/".format(prefix, fy)
-    rows = conn.query(
-        "SELECT invoice_no FROM sales WHERE invoice_date >= ? AND invoice_date <= ?", (start, end))
+    taken = {r["invoice_no"] for r in conn.query("SELECT invoice_no FROM sales")}
     highest = 0
-    for r in rows:
-        no = r["invoice_no"] or ""
-        if no.startswith(pattern):
+    for no in taken:
+        if no and no.startswith(pattern):
             tail = no[len(pattern):]
             if tail.isdigit():
                 highest = max(highest, int(tail))
-    return "{}{:04d}".format(pattern, highest + 1)
+    nxt = highest + 1
+    while "{}{:04d}".format(pattern, nxt) in taken:
+        nxt += 1
+    return "{}{:04d}".format(pattern, nxt)
 
 
 # ----------------------------------------------------- amount in words (INR)

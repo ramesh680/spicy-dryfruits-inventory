@@ -127,6 +127,9 @@ input,select,textarea{
 input:hover,select:hover,textarea:hover{border-color:var(--text-3)}
 input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent;background:var(--surface)}
 input::placeholder,textarea::placeholder{color:var(--text-3)}
+input.readonly{background:var(--surface-3);color:var(--text-2);cursor:default;font-variant-numeric:tabular-nums}
+input.readonly:hover{border-color:var(--border-strong)}
+input.readonly:focus{outline:none;border-color:var(--border-strong)}
 textarea{min-height:68px;resize:vertical}
 select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--text-3) 50%),linear-gradient(135deg,var(--text-3) 50%,transparent 50%);
   background-position:calc(100% - 15px) 52%,calc(100% - 10px) 52%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:2rem}

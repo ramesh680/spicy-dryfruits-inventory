@@ -14,6 +14,7 @@ os.environ.pop("DATABASE_URL", None)
 os.environ["SQLITE_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 
 from app import app                                   # noqa: E402
+import core                                          # noqa: E402
 from core import amount_in_words, compute_line        # noqa: E402
 from db import get_db                                 # noqa: E402
 
@@ -383,6 +384,60 @@ with get_db() as conn:
           conn.scalar("SELECT COUNT(*) AS c FROM items") > 0, True)
 check("the app still serves after the upgrade", c.get("/").status_code, 200)
 check("and the admin screen offers to set a PIN again", "PIN" in c.get("/admin").get_data(as_text=True), True)
+
+
+print("\n=== 17. Invoice numbers are generated, not typed ===")
+body = c.get("/sales/new").get_data(as_text=True)
+m = _re.search(r'id="invoice_no"[^>]*', body)
+field = m.group(0) if m else ""
+check("the number field is read-only", "readonly" in field, True)
+check("and is not submitted with the form", 'name="invoice_no"' in field, False)
+check("the next number is shown to the user", "RKK/" in field or "SDF/" in field, True)
+
+# a hand-typed number must be ignored
+c.post("/sales/new", data={"invoice_date": "2026-09-08", "invoice_no": "hgtfhtdtxfg",
+                           "state_code": "27", "party_name": "Walk-in",
+                           "item_id": [str(KAJU)], "qty": ["1"], "rate": ["100"],
+                           "discount_pct": ["0"]}, follow_redirects=True)
+with get_db() as conn:
+    latest = conn.query_one("SELECT invoice_no FROM sales ORDER BY id DESC LIMIT 1")
+    check("a typed number is ignored", latest["invoice_no"] == "hgtfhtdtxfg", False)
+    check("a generated one is used instead", latest["invoice_no"].startswith("SDF/2026-27/"), True)
+    nos = [r["invoice_no"] for r in conn.query("SELECT invoice_no FROM sales")]
+    check("every number is unique", len(nos), len(set(nos)))
+
+# editing must not change the number, whatever is posted
+with get_db() as conn:
+    sid2 = conn.query_one("SELECT id, invoice_no FROM sales ORDER BY id DESC LIMIT 1")
+c.post("/sales/" + str(sid2["id"]) + "/edit",
+       data={"invoice_date": "2026-09-08", "invoice_no": "TAMPERED/1",
+             "state_code": "27", "party_name": "Walk-in",
+             "item_id": [str(KAJU)], "qty": ["2"], "rate": ["100"], "discount_pct": ["0"]},
+       follow_redirects=True)
+with get_db() as conn:
+    same = conn.query_one("SELECT invoice_no, taxable FROM sales WHERE id = ?", (sid2["id"],))
+    check("the number survives an edit untouched", same["invoice_no"], sid2["invoice_no"])
+    check("but the figures do change", same["taxable"], 200)
+
+# a number already taken must be skipped, not reused
+with get_db() as conn:
+    nxt = core.next_invoice_no(conn, "2026-09-09", "SDF")
+    conn.execute("UPDATE sales SET invoice_no = ? WHERE id = ?", (nxt, sid2["id"]))
+    after = core.next_invoice_no(conn, "2026-09-09", "SDF")
+    check("generation skips a number already in use", after == nxt, False)
+    check("  and moves to the next free one",
+          int(after.rsplit("/", 1)[1]) > int(nxt.rsplit("/", 1)[1]), True)
+
+check("the financial year rolls over on 1 April",
+      (core.fy_of("2027-03-31"), core.fy_of("2027-04-01")), ("2026-27", "2027-28"))
+with get_db() as conn:
+    check("so numbering restarts in the new year",
+          core.next_invoice_no(conn, "2027-04-05", "SDF"), "SDF/2027-28/0001")
+
+# the supplier's own bill number stays typed by hand
+pbody = c.get("/purchases/new").get_data(as_text=True)
+pm = _re.search(r'id="bill_no"[^>]*', pbody)
+check("a supplier bill number is still entered by hand", 'name="bill_no"' in (pm.group(0) if pm else ""), True)
 
 
 print("\n" + ("=" * 46))

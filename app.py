@@ -536,7 +536,14 @@ def save_sale(conn, s, fallback_endpoint, sale_id=None):
 
     t = totals_from_lines(lines)
     now = datetime.now().isoformat(timespec="seconds")
-    inv_no = f("invoice_no") or core.next_invoice_no(conn, invoice_date, s["invoice_prefix"])
+    # Invoice numbers are generated, never typed: GST wants an unbroken series,
+    # and a hand-typed number is how a stray entry gets a meaningless one. On an
+    # edit the original number is kept.
+    if sale_id:
+        existing = conn.query_one("SELECT invoice_no FROM sales WHERE id = ?", (sale_id,))
+        inv_no = existing["invoice_no"]
+    else:
+        inv_no = core.next_invoice_no(conn, invoice_date, s["invoice_prefix"])
     header = dict(
         invoice_no=inv_no, invoice_date=invoice_date,
         party_id=int(party_id) if party_id else None,
@@ -600,8 +607,11 @@ def sale_form(conn, s, doc=None, lines=None):
         date_field="invoice_date", date_label="Invoice date",
         date_value=(doc["invoice_date"] if doc else today_str()),
         no_field="invoice_no", no_label="Invoice no.",
-        no_value=(doc["invoice_no"] if doc else ""),
-        no_placeholder=(core.next_invoice_no(conn, today_str(), s["invoice_prefix"]) + " (auto)"),
+        no_value=(doc["invoice_no"] if doc
+                  else core.next_invoice_no(conn, today_str(), s["invoice_prefix"])),
+        no_placeholder="", no_readonly=True,
+        no_hint=("Kept as it is - a GST invoice number never changes." if doc
+                 else "Generated automatically. Restarts each financial year."),
         party_label="Customer", walkin_label="Walk-in / cash sale",
         walkin_name_label="Customer name (if not saved)",
         walkin_placeholder="e.g. Walk-in customer",
