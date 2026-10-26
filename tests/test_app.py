@@ -19,7 +19,20 @@ from core import amount_in_words, compute_line        # noqa: E402
 from db import get_db                                 # noqa: E402
 
 app.config["TESTING"] = True
-c = app.test_client()
+
+OWNER = "ramesh.goswami100@gmail.com"
+OWNER_PW = "owner-pass-123"
+
+
+def signed_in_client():
+    cl = app.test_client()
+    cl.post("/login", data=dict(email=OWNER, password=OWNER_PW))
+    return cl
+
+
+# The owner sets a password on first run (local SQLite, no PIN: no code needed).
+app.test_client().post("/setup", data=dict(email=OWNER, password=OWNER_PW, confirm=OWNER_PW))
+c = signed_in_client()
 
 FAILS = []
 
@@ -274,7 +287,7 @@ check("an all-time range still renders", wide.status_code, 200)
 
 
 print("\n=== 14. Admin gate ===")
-locked = app.test_client()   # a fresh session: admin is locked here
+locked = signed_in_client()   # a fresh session: admin is locked here
 for path in ["/sales/1/edit", "/purchases/1/edit"]:
     r = locked.get(path)
     check("locked session cannot open " + path, r.status_code in (301, 302), True)
@@ -438,6 +451,94 @@ with get_db() as conn:
 pbody = c.get("/purchases/new").get_data(as_text=True)
 pm = _re.search(r'id="bill_no"[^>]*', pbody)
 check("a supplier bill number is still entered by hand", 'name="bill_no"' in (pm.group(0) if pm else ""), True)
+
+
+print("\n=== 18. Sign-in protects every page ===")
+import re as _re2  # noqa: E402
+anon = app.test_client()
+for path in ["/", "/sales", "/stock", "/reports", "/export/sales.csv", "/settings", "/users"]:
+    r = anon.get(path)
+    check("signed-out " + path + " goes to sign in",
+          r.status_code in (301, 302) and "/login" in r.headers.get("Location", ""), True)
+r = anon.post("/sales/new", data={"invoice_date": "2026-09-09"})
+check("signed-out POST is refused", "/login" in r.headers.get("Location", ""), True)
+check("health check stays open for Render", anon.get("/healthz").status_code, 200)
+check("sign-in page loads", anon.get("/login").status_code, 200)
+
+with get_db() as conn:
+    seeded = {r["email"]: r["role"] for r in conn.query("SELECT email, role FROM users")}
+check("Ramesh is seeded as owner", seeded.get(OWNER), "owner")
+check("Saurabh is seeded as owner too", seeded.get("saurabhsethi9211@gmail.com"), "owner")
+with get_db() as conn:
+    row = conn.query_one("SELECT pw_hash FROM users WHERE email = ?", (OWNER,))
+check("password stored hashed", OWNER_PW not in row["pw_hash"] and len(row["pw_hash"]) == 64, True)
+
+r = anon.post("/login", data=dict(email=OWNER, password="wrong"), follow_redirects=True)
+check("wrong password refused", "do not match" in r.get_data(as_text=True), True)
+r = anon.post("/login", data=dict(email="stranger@gmail.com", password="whatever1"), follow_redirects=True)
+check("unknown email refused", "do not match" in r.get_data(as_text=True), True)
+r = anon.post("/login", data=dict(email="SaurabhSethi9211@gmail.com", password="x"), follow_redirects=True)
+check("listed but not activated is told to ask for a link", "set-password link" in r.get_data(as_text=True), True)
+r = anon.post("/login", data=dict(email="  Ramesh.Goswami100@GMAIL.com ", password=OWNER_PW, next="/stock"))
+check("email is case-insensitive and next is honoured", r.headers.get("Location", "").endswith("/stock"), True)
+check("signed in can open the dashboard", anon.get("/").status_code, 200)
+r = app.test_client().post("/login", data=dict(email=OWNER, password=OWNER_PW, next="https://evil.example/"))
+check("next cannot send you off-site", "evil" in r.headers.get("Location", ""), False)
+check("setup page is closed once an owner exists",
+      app.test_client().get("/setup").status_code in (301, 302), True)
+
+print("\n=== 19. Owner grants access with a one-time link ===")
+r = c.post("/users/add", data=dict(email="New.Member@gmail.com", role="member"), follow_redirects=True)
+body = r.get_data(as_text=True)
+m = _re2.search(r'(https?://[^"\s]+/set-password/[A-Za-z0-9_\-]+)', body)
+check("an invite link is shown", bool(m), True)
+link = m.group(1).split("localhost", 1)[-1] if m else ""
+s2 = app.test_client()
+check("invite link opens the set-password page", s2.get(link).status_code, 200)
+r = s2.post(link, data=dict(password="short", confirm="short"), follow_redirects=True)
+check("short password refused", "at least 8" in r.get_data(as_text=True), True)
+r = s2.post(link, data=dict(password="member-pass-1", confirm="member-pass-1"))
+check("setting password signs them in", s2.get("/").status_code, 200)
+check("the link cannot be reused",
+      "expired or was already used" in app.test_client().get(link).get_data(as_text=True), True)
+check("a member cannot manage users", s2.get("/users").status_code, 403)
+check("a member does not see Users in the menu", "Users &amp; access" in s2.get("/").get_data(as_text=True), False)
+
+r = c.post("/users/add", data=dict(email="new.helper@gmail.com", name="Helper"), follow_redirects=True)
+check("owner can add anyone else", "new.helper@gmail.com" in r.get_data(as_text=True), True)
+r = c.post("/users/add", data=dict(email="not-an-email"), follow_redirects=True)
+check("bad email refused", "valid email" in r.get_data(as_text=True), True)
+
+with get_db() as conn:
+    sid_ = conn.query_one("SELECT id FROM users WHERE email = 'new.member@gmail.com'")["id"]
+    oid = conn.query_one("SELECT id FROM users WHERE email = ?", (OWNER,))["id"]
+c.post("/users/" + str(sid_) + "/disable")
+check("disabling signs them out at once", s2.get("/").status_code in (301, 302), True)
+r = app.test_client().post("/login", data=dict(email="new.member@gmail.com", password="member-pass-1"),
+                           follow_redirects=True)
+check("and they cannot sign back in", "do not match" in r.get_data(as_text=True), True)
+c.post("/users/" + str(sid_) + "/enable")
+r = app.test_client().post("/login", data=dict(email="new.member@gmail.com", password="member-pass-1"))
+check("re-enabled user can sign in again", r.headers.get("Location", "").endswith("/"), True)
+r = c.post("/users/" + str(oid) + "/remove", follow_redirects=True)
+check("owner cannot remove themself", "your own account" in r.get_data(as_text=True), True)
+
+print("\n=== 20. Lockout after repeated wrong passwords ===")
+t = app.test_client()
+for _ in range(5):
+    t.post("/login", data=dict(email="new.member@gmail.com", password="nope-nope"))
+r = t.post("/login", data=dict(email="new.member@gmail.com", password="member-pass-1"), follow_redirects=True)
+check("even the right password waits out the lock", "Too many wrong tries" in r.get_data(as_text=True), True)
+with get_db() as conn:
+    conn.execute("UPDATE users SET locked_until = '' WHERE id = ?", (sid_,))
+
+print("\n=== 21. Changing your password signs out other devices ===")
+other = signed_in_client()
+mine = signed_in_client()
+mine.post("/account", data=dict(current=OWNER_PW, password="owner-pass-456", confirm="owner-pass-456"))
+check("this device stays signed in", mine.get("/").status_code, 200)
+check("the other device is signed out", other.get("/").status_code in (301, 302), True)
+mine.post("/account", data=dict(current="owner-pass-456", password=OWNER_PW, confirm=OWNER_PW))
 
 
 print("\n" + ("=" * 46))
