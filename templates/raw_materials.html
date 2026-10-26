@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Raw materials</h1><p class="sub">What you bought, how much went into each product, and what is still left.</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='raw') }}">{{ icons.ic('down', 15) }} CSV</a>
+    <a class="btn" href="{{ url_for('purchase_new') }}">{{ icons.ic('cart', 15) }} Buy raw material</a>
+    <a class="btn primary" href="{{ url_for('production_new') }}">{{ icons.ic('mix', 15) }} New batch</a>
+  </div>
+</div>
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <div class="stat"><div class="label">Raw materials</div><div class="value">{{ rows|length }}</div></div>
+  <div class="stat"><div class="label">Bought (taxable)</div><div class="value">&#8377;{{ total_bought|inr }}</div></div>
+  <div class="stat accent"><div class="label">Left in stock</div><div class="value">&#8377;{{ total_left|inr }}</div><div class="note">at average cost</div></div>
+</div>
+
+<div class="card">
+  <h2>Bought, used and left</h2>
+  <p class="sub">&ldquo;Used in&rdquo; adds up every production batch, product by product.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Raw material</th><th class="num">Opening</th><th class="num">Bought</th><th class="num">Used</th>
+      <th>Used in</th><th class="num">Left</th><th class="num">Left value</th><th style="min-width:110px">Used so far</th></tr></thead>
+    <tbody>
+      {% for r in rows %}<tr>
+        <td style="font-weight:550">{{ r.name }}
+          {% if r.left < 0 %}<span class="badge b-red">negative</span>{% elif r.low %}<span class="badge b-amber">reorder</span>{% endif %}</td>
+        <td class="num">{{ r.opening|qty }}</td>
+        <td class="num">{{ r.bought|qty }}</td>
+        <td class="num">{{ r.used|qty }}</td>
+        <td class="small">{% for u in r.per_product %}<div>{{ u.product_name }}: <strong>{{ u.q|qty }} {{ r.unit }}</strong>
+            <span class="muted">({{ u.batches }} batch{{ 'es' if u.batches != 1 }})</span></div>
+          {% else %}<span class="muted">not used yet</span>{% endfor %}</td>
+        <td class="num" style="font-weight:640">{{ r.left|qty }} <span class="muted small">{{ r.unit }}</span></td>
+        <td class="num">&#8377;{{ r.left_value|inr }}</td>
+        <td><div style="height:8px;background:var(--surface-3);border-radius:4px;overflow:hidden">
+            <div style="height:100%;width:{{ [r.used_pct, 100]|min }}%;background:var(--accent)"></div></div>
+          <div class="small muted" style="margin-top:.2rem">{{ r.used_pct }}%</div></td>
+      </tr>{% else %}<tr><td colspan="8" class="empty"><strong>No raw materials yet</strong>
+        On the <a href="{{ url_for('items') }}">Items</a> page, add each ingredient with type &ldquo;Raw material&rdquo;.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>What you can still make</h2>
+  <p class="sub">From the raw material left, using each product&rsquo;s recipe. The first ingredient to run out sets the limit.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Product</th><th>Recipe (per unit)</th><th class="num">Can still make</th><th>Runs out first</th><th></th></tr></thead>
+    <tbody>
+      {% for m in makeable %}<tr>
+        <td style="font-weight:550">{{ m.name }}</td>
+        <td class="small muted">{% for l in m.recipe %}{{ l.name }} {{ l.qty_per_unit|qty }} {{ l.unit }}{{ ', ' if not loop.last }}{% endfor %}</td>
+        <td class="num" style="font-weight:640">{{ m.qty|qty }} {{ m.unit }}</td>
+        <td>{% if m.qty <= 0 %}<span class="badge b-red">{{ m.limited_by }}</span>{% else %}{{ m.limited_by }}{% endif %}</td>
+        <td class="num"><a class="btn sm" href="{{ url_for('recipe_edit', product_id=m.id) }}">Edit recipe</a>
+          <a class="btn sm" href="{{ url_for('production_new', product=m.id) }}">Make</a></td>
+      </tr>{% else %}<tr><td colspan="5" class="empty"><strong>No recipes yet</strong>
+        Set one below, or tick &ldquo;save as recipe&rdquo; when you record a batch.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  {% if products_without_recipe %}
+  <p class="note-line">No recipe yet:
+    {% for p in products_without_recipe %}<a href="{{ url_for('recipe_edit', product_id=p.id) }}">{{ p.name }}</a>{{ ', ' if not loop.last }}{% endfor %}</p>
+  {% endif %}
+</div>
+{% endblock %}

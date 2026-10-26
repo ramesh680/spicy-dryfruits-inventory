@@ -11,6 +11,11 @@
   <form method="post" action="{{ url_for('items_save') }}" id="item-form">
     <input type="hidden" name="id" id="f-id">
     <div class="row r3">
+      <div class="field"><label for="f-kind">Type</label>
+        <select id="f-kind" name="kind">
+          <option value="product">Product &ndash; something you sell</option>
+          <option value="raw">Raw material &ndash; an ingredient you buy and use up</option>
+        </select></div>
       <div class="field"><label for="f-name">Item name</label><input id="f-name" name="name" required placeholder="e.g. Masala Kaju"></div>
       <div class="field"><label for="f-hsn">HSN code</label><input id="f-hsn" name="hsn" placeholder="e.g. 2008"></div>
       <div class="field"><label for="f-gst">GST rate</label>
@@ -39,11 +44,12 @@
   <h2>Active items</h2>
   <p class="sub">{{ rows|length }} item{{ '' if rows|length == 1 else 's' }}.</p>
   <div class="tw"><table>
-    <thead><tr><th>Item</th><th>HSN</th><th class="num">GST</th><th class="num">In stock</th><th class="num">Avg cost</th><th class="num">Stock value</th><th class="num">Sale rate</th><th class="num">Reorder at</th><th></th></tr></thead>
+    <thead><tr><th>Item</th><th>Type</th><th>HSN</th><th class="num">GST</th><th class="num">In stock</th><th class="num">Avg cost</th><th class="num">Stock value</th><th class="num">Sale rate</th><th class="num">Reorder at</th><th></th></tr></thead>
     <tbody>
       {% for r in rows %}
       <tr>
         <td>{{ r.name }} {% if r.low %}<span class="badge b-red">low</span>{% endif %}</td>
+        <td>{% if r.kind == 'raw' %}<span class="badge b-blue">raw material</span>{% else %}<span class="badge b-grey">product</span>{% endif %}</td>
         <td class="muted small">{{ r.hsn or '-' }}</td>
         <td class="num">{{ r.gst_rate|round(0)|int }}%</td>
         <td class="num">{{ r.stock_qty|qty }} {{ r.unit }}</td>
@@ -53,7 +59,7 @@
         <td class="num">{{ r.low_stock_qty|qty }}</td>
         <td class="num">
           <button class="btn sm edit" type="button"
-            data-id="{{ r.id }}" data-name="{{ r.name }}" data-hsn="{{ r.hsn }}"
+            data-id="{{ r.id }}" data-kind="{{ r.kind }}" data-name="{{ r.name }}" data-hsn="{{ r.hsn }}"
             data-gst="{{ r.gst_rate }}" data-unit="{{ r.unit }}" data-sale="{{ r.sale_rate }}"
             data-low="{{ r.low_stock_qty }}">Edit</button>
           <form method="post" action="{{ url_for('items_toggle', item_id=r.id) }}" class="inline">
@@ -61,7 +67,7 @@
           </form>
         </td>
       </tr>
-      {% else %}<tr><td colspan="9" class="empty">No items yet.</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="10" class="empty">No items yet.</td></tr>{% endfor %}
     </tbody>
   </table></div>
 </div>
@@ -83,6 +89,7 @@ document.querySelectorAll('.edit').forEach(function(b){
   b.addEventListener('click', function(){
     var d = b.dataset;
     document.getElementById('f-id').value = d.id;
+    document.getElementById('f-kind').value = d.kind || 'product';
     document.getElementById('f-name').value = d.name;
     document.getElementById('f-hsn').value = d.hsn;
     document.getElementById('f-gst').value = parseFloat(d.gst);

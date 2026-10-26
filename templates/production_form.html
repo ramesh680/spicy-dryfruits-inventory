@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div><h1>{{ 'Edit batch ' ~ doc.batch_no if doc else 'Record a production batch' }}</h1>
+    <p class="sub">Raw materials are taken out of stock at their average cost; the product goes into stock carrying that cost.</p></div>
+  <div class="actions"><a class="btn" href="{{ url_for('production') }}">Production register</a></div>
+</div>
+
+{% if not raws %}
+<div class="card"><p class="empty"><strong>No raw materials yet</strong>
+  On the <a href="{{ url_for('items') }}">Items</a> page, add each ingredient you buy with type &ldquo;Raw material&rdquo;, then record its purchase.</p></div>
+{% elif not products %}
+<div class="card"><p class="empty"><strong>No products yet</strong>
+  Add the product you make on the <a href="{{ url_for('items') }}">Items</a> page with type &ldquo;Product&rdquo;.</p></div>
+{% else %}
+<form method="post" id="prod"
+      data-raws='{{ raws_json }}' data-recipes='{{ recipes_json }}'
+      data-existing='{{ existing_json or "[]" }}'>
+  <div class="card">
+    <div class="row r3">
+      <div class="field"><label for="prod_date">Date made</label>
+        <input type="date" id="prod_date" name="prod_date" value="{{ doc.prod_date if doc else today }}" required></div>
+      <div class="field"><label for="batch_no">Batch no.</label>
+        <input type="text" id="batch_no" value="{{ next_no }}" readonly tabindex="-1" class="readonly">
+        <p class="small muted" style="margin:.3rem 0 0">Generated automatically.</p></div>
+      <div class="field"><label for="product_id">Product made</label>
+        <select id="product_id" name="product_id" required>
+          <option value="">Choose a product</option>
+          {% for p in products %}<option value="{{ p.id }}" data-unit="{{ p.unit }}"
+            {{ 'selected' if (doc and doc.product_id == p.id) or (not doc and preset_product == p.id) }}>{{ p.name }}</option>{% endfor %}
+        </select></div>
+    </div>
+    <div class="row r3">
+      <div class="field"><label for="qty_out">Quantity made (<span id="out-unit">kg</span>)</label>
+        <input type="number" id="qty_out" name="qty_out" step="0.001" min="0.001" required
+               value="{{ doc.qty_out if doc else '' }}" placeholder="e.g. 10"></div>
+      <div class="field"><label for="other_cost">Other costs for this batch (&#8377;)</label>
+        <input type="number" id="other_cost" name="other_cost" step="0.01" min="0" value="{{ doc.other_cost if doc else 0 }}">
+        <p class="small muted" style="margin:.3rem 0 0">Packing, gas, labour &ndash; optional, added to the product&rsquo;s cost.</p></div>
+      <div class="field"><label for="notes">Notes</label>
+        <input type="text" id="notes" name="notes" value="{{ doc.notes if doc else '' }}" placeholder="optional"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Raw materials used</h2>
+    <p class="sub" id="recipe-note">Pick a product: if it has a recipe, these fill in for the quantity you made. Adjust to what you actually used.</p>
+    <div class="tw"><table>
+      <thead><tr><th style="min-width:200px">Raw material</th><th class="num" style="width:130px">Qty used</th>
+        <th class="num">In stock</th><th class="num">Avg cost</th><th class="num">Cost</th><th style="width:40px"></th></tr></thead>
+      <tbody id="rlines"></tbody>
+      <tfoot>
+        <tr><td>Total raw input</td><td class="num" id="t-in">0</td><td colspan="2"></td><td class="num" id="t-raw">&#8377;0.00</td><td></td></tr>
+        <tr><td colspan="4">Estimated cost per <span class="out-unit">kg</span> made (incl. other costs)</td><td class="num" id="t-unit" style="font-weight:640">&ndash;</td><td></td></tr>
+      </tfoot>
+    </table></div>
+    <div class="btn-row" style="margin-top:.8rem">
+      <button type="button" class="btn sm" id="add-raw">+ Add raw material</button>
+      <button type="button" class="btn sm" id="refill">Refill from recipe</button>
+    </div>
+    <div class="check" style="margin-top:1rem">
+      <input type="checkbox" id="save_recipe" name="save_recipe" value="1">
+      <label for="save_recipe">Save these proportions as this product&rsquo;s recipe for next time</label>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn primary" type="submit">{{ 'Save changes' if doc else 'Save batch' }}</button>
+    <a class="btn" href="{{ url_for('production') }}">Cancel</a>
+  </div>
+</form>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var form = document.getElementById('prod');
+  if (!form) return;
+  var raws = JSON.parse(form.dataset.raws), recipes = JSON.parse(form.dataset.recipes),
+      existing = JSON.parse(form.dataset.existing || '[]');
+  var byId = {}; raws.forEach(function (r) { byId[r.id] = r; });
+  var body = document.getElementById('rlines'), product = document.getElementById('product_id'),
+      out = document.getElementById('qty_out'), other = document.getElementById('other_cost');
+  var touched = existing.length > 0;
+
+  function fmt(n, d) { return (Math.round(n * Math.pow(10, d)) / Math.pow(10, d)).toLocaleString('en-IN', {minimumFractionDigits: d === 2 ? 2 : 0, maximumFractionDigits: d}); }
+
+  function addRow(rawId, q) {
+    var tr = document.createElement('tr');
+    var opts = '<option value="">Choose</option>' + raws.map(function (r) {
+      return '<option value="' + r.id + '"' + (r.id == rawId ? ' selected' : '') + '>' + r.name.replace(/</g, '&lt;') + '</option>';
+    }).join('');
+    tr.innerHTML = '<td><select name="raw_id">' + opts + '</select></td>' +
+      '<td class="num"><input type="number" name="raw_qty" step="0.001" min="0" value="' + (q ? +q.toFixed(3) : '') + '" style="text-align:right"></td>' +
+      '<td class="num have"></td><td class="num avg"></td><td class="num cost"></td>' +
+      '<td><button type="button" class="btn sm danger rm" aria-label="Remove">&times;</button></td>';
+    body.appendChild(tr);
+    tr.querySelector('select').addEventListener('change', function () { touched = true; recalc(); });
+    tr.querySelector('input').addEventListener('input', function () { touched = true; recalc(); });
+    tr.querySelector('.rm').addEventListener('click', function () { tr.remove(); touched = true; recalc(); });
+  }
+
+  function fillFromRecipe(force) {
+    if (touched && !force) return;
+    var rec = recipes[product.value] || [], n = parseFloat(out.value) || 0;
+    var note = document.getElementById('recipe-note');
+    if (!product.value) return;
+    if (!rec.length) {
+      note.textContent = 'No recipe saved for this product yet. Add what you used below, and tick the box to save it as the recipe.';
+      if (!body.children.length) addRow('', 0);
+      return;
+    }
+    note.textContent = 'Filled from the saved recipe for ' + (n || 0) + ' ' + unit() + '. Adjust to what you actually used.';
+    body.innerHTML = '';
+    rec.forEach(function (l) { addRow(l.raw_id, l.qty_per_unit * n); });
+    touched = false;
+    recalc();
+  }
+
+  function unit() { var o = product.options[product.selectedIndex]; return (o && o.dataset.unit) || 'kg'; }
+
+  function recalc() {
+    var tin = 0, traw = 0;
+    body.querySelectorAll('tr').forEach(function (tr) {
+      var r = byId[tr.querySelector('select').value], q = parseFloat(tr.querySelector('input').value) || 0;
+      tr.querySelector('.have').innerHTML = r ? fmt(r.stock_qty, 3) + ' ' + r.unit + (q > r.stock_qty + 0.0001 ? ' <span class="badge b-red">short</span>' : '') : '';
+      tr.querySelector('.avg').textContent = r ? '\u20b9' + fmt(r.avg_cost, 2) : '';
+      var c = r ? r.avg_cost * q : 0;
+      tr.querySelector('.cost').textContent = r ? '\u20b9' + fmt(c, 2) : '';
+      tin += q; traw += c;
+    });
+    var n = parseFloat(out.value) || 0, extra = parseFloat(other.value) || 0;
+    document.getElementById('t-in').textContent = fmt(tin, 3);
+    document.getElementById('t-raw').textContent = '\u20b9' + fmt(traw, 2);
+    document.getElementById('t-unit').textContent = n > 0 ? '\u20b9' + fmt((traw + extra) / n, 2) : '\u2013';
+    document.querySelectorAll('.out-unit, #out-unit').forEach(function (e) { e.textContent = unit(); });
+  }
+
+  product.addEventListener('change', function () { touched = false; fillFromRecipe(); recalc(); });
+  out.addEventListener('input', function () { fillFromRecipe(); recalc(); });
+  other.addEventListener('input', recalc);
+  document.getElementById('add-raw').addEventListener('click', function () { addRow('', 0); });
+  document.getElementById('refill').addEventListener('click', function () { fillFromRecipe(true); });
+
+  if (existing.length) existing.forEach(function (l) { addRow(l.raw_id, l.qty); });
+  else if (product.value) fillFromRecipe();
+  if (!body.children.length) addRow('', 0);
+  recalc();
+})();
+</script>
+{% endblock %}

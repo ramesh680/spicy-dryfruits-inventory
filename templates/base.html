@@ -39,10 +39,13 @@
     <a class="nav {{ 'on' if ep=='quick' }}" href="{{ url_for('quick') }}">{{ icons.ic('bolt') }} Quick sale</a>
     <a class="nav {{ 'on' if ep=='sale_new' }}" href="{{ url_for('sale_new') }}">{{ icons.ic('tag') }} Full invoice</a>
     <a class="nav {{ 'on' if ep=='purchase_new' }}" href="{{ url_for('purchase_new') }}">{{ icons.ic('cart') }} New purchase</a>
+    <a class="nav {{ 'on' if ep in ('production_new','production_edit') }}" href="{{ url_for('production_new') }}">{{ icons.ic('mix') }} New batch</a>
 
     <div class="nav-label">Books</div>
     <a class="nav {{ 'on' if ep in ('sales','invoice') }}" href="{{ url_for('sales') }}">{{ icons.ic('receipt') }} Sales</a>
     <a class="nav {{ 'on' if ep in ('purchases','purchase_view') }}" href="{{ url_for('purchases') }}">{{ icons.ic('list') }} Purchases</a>
+    <a class="nav {{ 'on' if ep in ('production','production_view') }}" href="{{ url_for('production') }}">{{ icons.ic('list') }} Production</a>
+    <a class="nav {{ 'on' if ep in ('raw_materials','recipe_edit') }}" href="{{ url_for('raw_materials') }}">{{ icons.ic('jar') }} Raw materials</a>
     <a class="nav {{ 'on' if ep=='reports' }}" href="{{ url_for('reports') }}">{{ icons.ic('chart') }} Reports</a>
 
     <div class="nav-label">Setup</div>
@@ -83,7 +86,7 @@
   <a href="{{ url_for('quick') }}" class="{{ 'on' if ep=='quick' }}">{{ icons.ic('bolt', 20) }}Sell</a>
   <a href="{{ url_for('purchase_new') }}" class="{{ 'on' if ep=='purchase_new' }}">{{ icons.ic('cart', 20) }}Buy</a>
   <a href="{{ url_for('stock') }}" class="{{ 'on' if ep=='stock' }}">{{ icons.ic('box', 20) }}Stock</a>
-  <a href="{{ url_for('reports') }}" class="{{ 'on' if ep in ('reports','sales','purchases','items','parties','settings') }}">{{ icons.ic('chart', 20) }}More</a>
+  <a href="{{ url_for('reports') }}" class="{{ 'on' if ep in ('reports','sales','purchases','items','parties','settings','production','production_view','production_new','production_edit','raw_materials','recipe_edit') }}">{{ icons.ic('chart', 20) }}More</a>
 </nav>
 
 <div class="tip" id="tip" role="status" aria-live="polite"></div>

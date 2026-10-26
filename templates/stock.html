@@ -21,7 +21,7 @@
       <th class="num">Value</th><th class="num">Sale rate</th><th class="num">Margin/unit</th><th>Status</th></tr></thead>
     <tbody>
       {% for r in rows %}<tr>
-        <td style="font-weight:550">{{ r.name }}</td>
+        <td style="font-weight:550">{{ r.name }}{% if r.kind == 'raw' %} <span class="badge b-blue">raw</span>{% endif %}</td>
         <td class="muted small">{{ r.hsn or '-' }}</td>
         <td class="num">{{ r.gst_rate|round(0)|int }}%</td>
         <td class="num">{{ r.stock_qty|qty }} <span class="muted small">{{ r.unit }}</span></td>
