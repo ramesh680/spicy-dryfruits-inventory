@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_filters.html" as fl %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Purchase register</h1><p class="sub">{{ start|dmy }} to {{ end|dmy }}{% if q %} &middot; matching &ldquo;{{ q }}&rdquo;{% endif %}</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='purchases', start=start, end=end) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <a class="btn primary" href="{{ url_for('purchase_new') }}">{{ icons.ic('cart', 15) }} Record purchase</a>
+  </div>
+</div>
+
+{{ fl.rangebar('purchases', presets, preset, start, end, q, 'Bill no., supplier or item') }}
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <div class="stat"><div class="label">Bills</div><div class="value">{{ rows|length }}</div></div>
+  <div class="stat"><div class="label">Taxable value</div><div class="value">&#8377;{{ tot.taxable|inr }}</div></div>
+  <div class="stat"><div class="label">Input tax credit</div><div class="value">&#8377;{{ (tot.cgst + tot.sgst + tot.igst)|inr }}</div></div>
+  <div class="stat accent"><div class="label">Total paid</div><div class="value">&#8377;{{ grand|inr }}</div></div>
+</div>
+
+<div class="card">
+  <div class="tw"><table>
+    <thead><tr><th>Bill</th><th>Date</th><th>Supplier</th><th>Supply</th>
+      <th class="num">Taxable</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">IGST</th><th class="num">Total</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}<tr>
+        <td><a href="{{ url_for('purchase_view', pid=r.id) }}">{{ r.bill_no or '#' ~ r.id }}</a></td>
+        <td class="small muted">{{ r.bill_date|dmy }}</td>
+        <td>{{ r.party_name }}</td>
+        <td>{% if r.interstate %}<span class="badge b-amber">IGST</span>{% else %}<span class="badge b-green">CGST+SGST</span>{% endif %}</td>
+        <td class="num">{{ r.taxable|inr }}</td>
+        <td class="num">{{ r.cgst|inr }}</td>
+        <td class="num">{{ r.sgst|inr }}</td>
+        <td class="num">{{ r.igst|inr }}</td>
+        <td class="num" style="font-weight:640">&#8377;{{ r.total|inr }}</td>
+        <td class="num">
+          {% if is_admin %}
+          <a class="btn sm" href="{{ url_for('purchase_edit', pid=r.id) }}">Edit</a>
+          <form method="post" action="{{ url_for('purchase_delete', pid=r.id) }}" class="inline"
+                onsubmit="return confirm('Delete this bill? Stock and costing will be recalculated. This cannot be undone.')">
+            <button class="btn sm danger" type="submit">Delete</button></form>
+          {% else %}<span class="muted small">&ndash;</span>{% endif %}
+        </td>
+      </tr>{% else %}<tr><td colspan="10" class="empty">
+        <strong>{% if q %}Nothing matches that search{% else %}No purchases in this period{% endif %}</strong>
+        {% if q %}Try a different term, or widen the date range.{% else %}Record a bill to start tracking stock.{% endif %}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% endblock %}

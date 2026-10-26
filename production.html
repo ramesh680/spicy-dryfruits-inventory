@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_filters.html" as fl %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Production register</h1><p class="sub">{{ start|dmy }} to {{ end|dmy }}</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='production', start=start, end=end) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <a class="btn" href="{{ url_for('raw_materials') }}">{{ icons.ic('jar', 15) }} Raw materials</a>
+    <a class="btn primary" href="{{ url_for('production_new') }}">{{ icons.ic('mix', 15) }} New batch</a>
+  </div>
+</div>
+
+{{ fl.rangebar('production', presets, preset, start, end) }}
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <div class="stat"><div class="label">Batches</div><div class="value">{{ rows|length }}</div></div>
+  <div class="stat accent"><div class="label">Cost of goods made</div><div class="value">&#8377;{{ total_out_cost|inr }}</div><div class="note">raw materials plus other costs</div></div>
+</div>
+
+<div class="card">
+  <div class="tw"><table>
+    <thead><tr><th>Batch</th><th>Date</th><th>Product</th><th class="num">Made</th><th>Raw materials used</th>
+      <th class="num">Batch cost</th><th class="num">Cost / unit</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}<tr>
+        <td><a href="{{ url_for('production_view', pid=r.id) }}">{{ r.batch_no }}</a></td>
+        <td class="small muted">{{ r.prod_date|dmy }}</td>
+        <td style="font-weight:550">{{ r.product_name }}</td>
+        <td class="num">{{ r.qty_out|qty }} <span class="muted small">{{ units.get(r.product_id, '') }}</span></td>
+        <td class="small muted">{% for l in r.lines %}{{ l.raw_name }} {{ l.qty|qty }}{{ ', ' if not loop.last }}{% endfor %}</td>
+        <td class="num">&#8377;{{ r.total_cost|inr }}</td>
+        <td class="num">&#8377;{{ r.unit_cost|inr }}</td>
+        <td class="num">{% if is_admin %}
+          <a class="btn sm" href="{{ url_for('production_edit', pid=r.id) }}">Edit</a>
+          <form method="post" action="{{ url_for('production_delete', pid=r.id) }}" class="inline"
+                onsubmit="return confirm('Delete this batch? Its raw materials go back into stock. This cannot be undone.')">
+            <button class="btn sm danger" type="submit">Delete</button></form>
+          {% else %}<span class="muted small">&ndash;</span>{% endif %}</td>
+      </tr>{% else %}<tr><td colspan="8" class="empty"><strong>No batches in this period</strong>
+        Record a batch each time you turn raw materials into a product.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% endblock %}

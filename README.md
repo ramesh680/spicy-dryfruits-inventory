@@ -75,6 +75,25 @@ details and a signature block. Print it, or save it as a PDF from the print
 dialog. Invoice numbers run per financial year — `SDF/2026-27/0001` — and restart
 each April.
 
+### Raw materials and production
+
+Mark each item as a **Product** (something you sell) or a **Raw material** (an
+ingredient you buy and use up) on the Items page. Raw materials are bought on an
+ordinary purchase bill, so their GST input credit is counted as usual, and they
+stay off the sale screens.
+
+A **production batch** (New batch) records turning raw materials into a product,
+for example seven seeds into 7 in 1 Mixed Seeds. Each ingredient leaves stock at
+its weighted-average cost, and the product enters stock carrying the full cost
+of what went into it, plus any packing or other costs for the batch. Sales of
+that product are then costed from it, so profit is right.
+
+A product can have a **recipe** (quantity of each raw material per unit made).
+New batches fill in from the recipe for the quantity you made, and you adjust to
+what you actually used. The **Raw materials** page shows, for each ingredient,
+what was bought, how much went into each product, what is left, and how much of
+each product the remaining stock is enough for.
+
 ## Running it locally
 
 ```bash

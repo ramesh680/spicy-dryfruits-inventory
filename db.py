@@ -248,7 +248,42 @@ SCHEMA = [
         total {NUM} NOT NULL DEFAULT 0,
         cost_rate {NUM} NOT NULL DEFAULT 0
     )""",
+    # Recipe: how much of each raw material goes into one unit of a product.
+    """CREATE TABLE IF NOT EXISTS recipe_lines (
+        id {PK},
+        product_id INTEGER NOT NULL,
+        raw_id INTEGER NOT NULL,
+        qty_per_unit {NUM} NOT NULL DEFAULT 0
+    )""",
+    # A production batch turns raw materials into a finished product.
+    """CREATE TABLE IF NOT EXISTS productions (
+        id {PK},
+        batch_no TEXT DEFAULT '',
+        prod_date TEXT NOT NULL,
+        product_id INTEGER NOT NULL,
+        product_name TEXT DEFAULT '',
+        qty_out {NUM} NOT NULL DEFAULT 0,
+        raw_cost {NUM} NOT NULL DEFAULT 0,
+        other_cost {NUM} NOT NULL DEFAULT 0,
+        total_cost {NUM} NOT NULL DEFAULT 0,
+        notes TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        edit_count INTEGER NOT NULL DEFAULT 0
+    )""",
+    """CREATE TABLE IF NOT EXISTS production_lines (
+        id {PK},
+        production_id INTEGER NOT NULL,
+        raw_id INTEGER NOT NULL,
+        raw_name TEXT DEFAULT '',
+        qty {NUM} NOT NULL DEFAULT 0,
+        cost_rate {NUM} NOT NULL DEFAULT 0,
+        cost {NUM} NOT NULL DEFAULT 0
+    )""",
     "CREATE INDEX IF NOT EXISTS idx_pl_purchase ON purchase_lines(purchase_id)",
+    "CREATE INDEX IF NOT EXISTS idx_prl_prod ON production_lines(production_id)",
+    "CREATE INDEX IF NOT EXISTS idx_rl_product ON recipe_lines(product_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pr_date ON productions(prod_date)",
     "CREATE INDEX IF NOT EXISTS idx_sl_sale ON sale_lines(sale_id)",
     "CREATE INDEX IF NOT EXISTS idx_p_date ON purchases(bill_date)",
     "CREATE INDEX IF NOT EXISTS idx_s_date ON sales(invoice_date)",
@@ -280,6 +315,8 @@ MIGRATIONS = [
     ("sales", "edit_count", "INTEGER NOT NULL DEFAULT 0"),
     ("purchases", "updated_at", "TEXT DEFAULT ''"),
     ("purchases", "edit_count", "INTEGER NOT NULL DEFAULT 0"),
+    # 'product' = something you sell; 'raw' = an ingredient you buy and use up
+    ("items", "kind", "TEXT NOT NULL DEFAULT 'product'"),
 ]
 
 

@@ -73,7 +73,8 @@ def items_json(items):
     return json.dumps([
         dict(id=i["id"], name=i["name"], unit=i["unit"],
              gst_rate=float(i["gst_rate"]), sale_rate=float(i.get("sale_rate") or 0),
-             stock_qty=float(i.get("stock_qty") or 0))
+             stock_qty=float(i.get("stock_qty") or 0),
+             kind=i.get("kind") or "product")
         for i in items])
 
 
@@ -292,6 +293,7 @@ def items_save():
             unit=f("unit", "kg"), low_stock_qty=fnum("low_stock_qty"),
             sale_rate=fnum("sale_rate"), opening_qty=fnum("opening_qty"),
             opening_rate=fnum("opening_rate"),
+            kind="raw" if f("kind") == "raw" else "product",
         )
         if not data["name"]:
             flash("Item name is required.", "error")
@@ -300,10 +302,10 @@ def items_save():
         if item_id:
             conn.execute(
                 "UPDATE items SET name=?, hsn=?, gst_rate=?, unit=?, low_stock_qty=?, "
-                "sale_rate=?, opening_qty=?, opening_rate=? WHERE id=?",
+                "sale_rate=?, opening_qty=?, opening_rate=?, kind=? WHERE id=?",
                 (data["name"], data["hsn"], data["gst_rate"], data["unit"],
                  data["low_stock_qty"], data["sale_rate"], data["opening_qty"],
-                 data["opening_rate"], int(item_id)))
+                 data["opening_rate"], data["kind"], int(item_id)))
             flash("Item updated.", "ok")
         else:
             data["created_at"] = today_str()
@@ -585,7 +587,7 @@ def quick():
         s = get_settings(conn)
         if request.method == "POST":
             return save_sale(conn, s, "quick")
-        items = [i for i in core.stock_rows(conn)]
+        items = [i for i in core.stock_rows(conn) if i["kind"] != "raw"]
         return render_template(
             "quick.html", s=s, items=items, items_json=items_json(items),
             parties=conn.query("SELECT * FROM parties WHERE kind IN ('customer','both') ORDER BY name"),
@@ -595,7 +597,8 @@ def quick():
 
 
 def sale_form(conn, s, doc=None, lines=None):
-    items = core.stock_rows(conn)
+    used = {l["item_id"] for l in (lines or [])}
+    items = [i for i in core.stock_rows(conn) if i["kind"] != "raw" or i["id"] in used]
     parties = conn.query("SELECT * FROM parties WHERE kind IN ('customer','both') ORDER BY name")
     return render_template(
         "entry_form.html", s=s, items=items, parties=parties, doc=doc,
@@ -676,6 +679,234 @@ def stock():
         return render_template("stock.html", s=get_settings(conn), rows=rows,
                                total_value=money(sum(r["stock_value"] for r in rows)),
                                low_count=len([r for r in rows if r["low"]]))
+
+
+# ------------------------------------------------- production & raw material
+
+def next_batch_no(conn):
+    highest = 0
+    for r in conn.query("SELECT batch_no FROM productions"):
+        tail = (r["batch_no"] or "").rsplit("-", 1)[-1]
+        if tail.isdigit():
+            highest = max(highest, int(tail))
+    return "BATCH-{:04d}".format(highest + 1)
+
+
+def _raws_and_products(conn, keep_ids=()):
+    rows = core.stock_rows(conn)
+    raws = [r for r in rows if r["kind"] == "raw" or r["id"] in keep_ids]
+    products = [r for r in rows if r["kind"] != "raw" or r["id"] in keep_ids]
+    return raws, products
+
+
+def save_production(conn, prod_id=None):
+    product_id = f("product_id")
+    out_qty = fnum("qty_out")
+    items = {i["id"]: i for i in conn.query("SELECT * FROM items")}
+    try:
+        product = items[int(product_id)]
+    except (KeyError, ValueError):
+        product = None
+    back = url_for("production_edit", pid=prod_id) if prod_id else url_for("production_new")
+    if not product:
+        flash("Choose the product you made.", "error")
+        return redirect(back)
+    if out_qty <= 0:
+        flash("Enter how much " + product["name"] + " this batch produced.", "error")
+        return redirect(back)
+
+    lines, seen = [], set()
+    for raw_id, q in zip(request.form.getlist("raw_id"), request.form.getlist("raw_qty")):
+        try:
+            rid, q = int(raw_id), float(q or 0)
+        except ValueError:
+            continue
+        if q <= 0 or rid not in items or rid == product["id"]:
+            continue
+        if rid in seen:   # the same ingredient twice is one line
+            for l in lines:
+                if l["raw_id"] == rid:
+                    l["qty"] = core.qty(l["qty"] + q)
+            continue
+        seen.add(rid)
+        lines.append(dict(raw_id=rid, raw_name=items[rid]["name"], qty=core.qty(q)))
+    if not lines:
+        flash("Add the raw materials this batch used.", "error")
+        return redirect(back)
+
+    # Stock as it stands before this batch: on an edit, add back what the old
+    # version of it took, so a batch is never short of its own ingredients.
+    already = {}
+    if prod_id:
+        for l in conn.query("SELECT raw_id, qty FROM production_lines WHERE production_id = ?", (prod_id,)):
+            already[l["raw_id"]] = already.get(l["raw_id"], 0.0) + float(l["qty"])
+    short = []
+    for l in lines:
+        it = items[l["raw_id"]]
+        have = float(it["stock_qty"] or 0) + already.get(l["raw_id"], 0.0)
+        if have + 0.0001 < l["qty"]:
+            short.append("{} (have {} {})".format(it["name"], core.qty(have), it["unit"]))
+
+    now = datetime.now().isoformat(timespec="seconds")
+    header = dict(prod_date=f("prod_date", today_str()), product_id=product["id"],
+                  product_name=product["name"], qty_out=core.qty(out_qty),
+                  other_cost=money(fnum("other_cost")), notes=f("notes"))
+    if prod_id:
+        sets = ", ".join(k + " = ?" for k in header)
+        conn.execute("UPDATE productions SET " + sets + ", updated_at = ?, edit_count = edit_count + 1 WHERE id = ?",
+                     list(header.values()) + [now, prod_id])
+        conn.execute("DELETE FROM production_lines WHERE production_id = ?", (prod_id,))
+        pid = prod_id
+    else:
+        header.update(batch_no=next_batch_no(conn), created_at=now)
+        pid = conn.insert("productions", header)
+    for l in lines:
+        conn.insert("production_lines", dict(production_id=pid, raw_id=l["raw_id"],
+                                             raw_name=l["raw_name"], qty=l["qty"]))
+
+    if f("save_recipe"):
+        conn.execute("DELETE FROM recipe_lines WHERE product_id = ?", (product["id"],))
+        for l in lines:
+            conn.insert("recipe_lines", dict(product_id=product["id"], raw_id=l["raw_id"],
+                                             qty_per_unit=round(l["qty"] / out_qty, 6)))
+
+    core.rebuild_stock(conn)
+    if short:
+        flash("Batch saved, but these raw materials went negative: " + ", ".join(short)
+              + ". Record the missing purchase to correct stock and cost.", "warn")
+    else:
+        flash("Batch " + ("updated" if prod_id else "recorded") + " - raw stock used up and "
+              + product["name"] + " added to stock.", "ok")
+    return redirect(url_for("production_view", pid=pid))
+
+
+def production_form(conn, doc=None, lines=None):
+    keep = {doc["product_id"]} | {l["raw_id"] for l in lines} if doc else set()
+    raws, products = _raws_and_products(conn, keep)
+    preset_product = request.args.get("product", type=int)
+    return render_template(
+        "production_form.html", s=get_settings(conn), doc=doc, raws=raws, products=products,
+        raws_json=json.dumps([dict(id=r["id"], name=r["name"], unit=r["unit"],
+                                   stock_qty=float(r["stock_qty"]), avg_cost=float(r["avg_cost"]))
+                              for r in raws]),
+        recipes_json=json.dumps(core.recipes_json(conn)),
+        existing_json=json.dumps([dict(raw_id=l["raw_id"], qty=float(l["qty"])) for l in lines])
+        if lines else "",
+        preset_product=preset_product,
+        next_no=doc["batch_no"] if doc else next_batch_no(conn))
+
+
+@app.route("/production")
+def production():
+    start, end, preset = resolve_range()
+    with get_db() as conn:
+        rows = conn.query(
+            "SELECT * FROM productions WHERE prod_date >= ? AND prod_date <= ? "
+            "ORDER BY prod_date DESC, id DESC", (start, end))
+        for r in rows:
+            r["lines"] = conn.query(
+                "SELECT raw_name, qty FROM production_lines WHERE production_id = ? ORDER BY id", (r["id"],))
+            q = float(r["qty_out"])
+            r["unit_cost"] = money(float(r["total_cost"]) / q) if q > 0 else 0.0
+        units = {i["id"]: i["unit"] for i in conn.query("SELECT id, unit FROM items")}
+        return render_template("production.html", s=get_settings(conn), rows=rows, units=units,
+                               start=start, end=end, preset=preset, presets=PRESETS, q="",
+                               total_out_cost=money(sum(float(r["total_cost"]) for r in rows)))
+
+
+@app.route("/production/new", methods=["GET", "POST"])
+def production_new():
+    with get_db() as conn:
+        if request.method == "POST":
+            return save_production(conn)
+        return production_form(conn)
+
+
+@app.route("/production/<int:pid>")
+def production_view(pid):
+    with get_db() as conn:
+        doc = conn.query_one("SELECT * FROM productions WHERE id = ?", (pid,))
+        if not doc:
+            return redirect(url_for("production"))
+        lines = conn.query(
+            "SELECT l.*, i.unit FROM production_lines l LEFT JOIN items i ON i.id = l.raw_id "
+            "WHERE l.production_id = ? ORDER BY l.id", (pid,))
+        unit = conn.scalar("SELECT unit FROM items WHERE id = ?", (doc["product_id"],), "kg")
+        total_in = sum(float(l["qty"]) for l in lines)
+        q = float(doc["qty_out"])
+        return render_template("production_view.html", s=get_settings(conn), doc=doc, lines=lines,
+                               unit=unit, total_in=core.qty(total_in),
+                               unit_cost=money(float(doc["total_cost"]) / q) if q > 0 else 0.0,
+                               yield_pct=round(q / total_in * 100, 1) if total_in > 0 else 0.0)
+
+
+@app.route("/production/<int:pid>/edit", methods=["GET", "POST"])
+@admin_required
+def production_edit(pid):
+    with get_db() as conn:
+        doc = conn.query_one("SELECT * FROM productions WHERE id = ?", (pid,))
+        if not doc:
+            return redirect(url_for("production"))
+        if request.method == "POST":
+            return save_production(conn, prod_id=pid)
+        lines = conn.query("SELECT * FROM production_lines WHERE production_id = ? ORDER BY id", (pid,))
+        return production_form(conn, doc=doc, lines=lines)
+
+
+@app.route("/production/<int:pid>/delete", methods=["POST"])
+@admin_required
+def production_delete(pid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM production_lines WHERE production_id = ?", (pid,))
+        conn.execute("DELETE FROM productions WHERE id = ?", (pid,))
+        core.rebuild_stock(conn)
+        flash("Batch deleted - raw materials returned to stock.", "ok")
+    return redirect(url_for("production"))
+
+
+@app.route("/raw-materials")
+def raw_materials():
+    with get_db() as conn:
+        rows = core.raw_material_rows(conn)
+        products = [p for p in core.stock_rows(conn) if p["kind"] != "raw"]
+        makeable = []
+        for p in products:
+            cm = core.can_make(conn, p["id"])
+            if cm is not None:
+                makeable.append(dict(id=p["id"], name=p["name"], unit=p["unit"],
+                                     recipe=core.recipe_for(conn, p["id"]), **cm))
+        return render_template(
+            "raw_materials.html", s=get_settings(conn), rows=rows, makeable=makeable,
+            products_without_recipe=[p for p in products if not any(m["id"] == p["id"] for m in makeable)],
+            total_left=money(sum(r["left_value"] for r in rows)),
+            total_bought=money(sum(r["bought_value"] for r in rows)))
+
+
+@app.route("/recipes/<int:product_id>", methods=["GET", "POST"])
+def recipe_edit(product_id):
+    with get_db() as conn:
+        product = conn.query_one("SELECT * FROM items WHERE id = ?", (product_id,))
+        if not product or (product.get("kind") or "product") == "raw":
+            return redirect(url_for("raw_materials"))
+        if request.method == "POST":
+            per = fnum("per_qty", 1) or 1
+            conn.execute("DELETE FROM recipe_lines WHERE product_id = ?", (product_id,))
+            n = 0
+            for raw_id, q in zip(request.form.getlist("raw_id"), request.form.getlist("raw_qty")):
+                try:
+                    rid, q = int(raw_id), float(q or 0)
+                except ValueError:
+                    continue
+                if q > 0 and rid != product_id:
+                    conn.insert("recipe_lines", dict(product_id=product_id, raw_id=rid,
+                                                     qty_per_unit=round(q / per, 6)))
+                    n += 1
+            flash("Recipe for " + product["name"] + (" saved." if n else " cleared."), "ok")
+            return redirect(url_for("raw_materials"))
+        raws, _ = _raws_and_products(conn)
+        recipe = core.recipe_for(conn, product_id)
+        return render_template("recipe_form.html", s=get_settings(conn), product=product,
+                               raws=raws, recipe=recipe)
 
 
 # --------------------------------------------------------------- reports
@@ -822,6 +1053,30 @@ def export(kind):
                         [[r["name"], r["hsn"], r["gst_rate"], r["unit"], r["stock_qty"],
                           r["avg_cost"], r["stock_value"], r["sale_rate"],
                           r["low_stock_qty"], "LOW" if r["low"] else "OK"] for r in rows])
+
+        if kind == "raw":
+            out = []
+            for r in core.raw_material_rows(conn):
+                used_in = "; ".join("{}: {}".format(u["product_name"], u["q"]) for u in r["per_product"])
+                out.append([r["name"], r["unit"], r["opening"], r["bought"], r["bought_value"],
+                            r["used"], used_in, r["left"], r["avg_cost"], r["left_value"]])
+            return _csv("raw-materials-{}.csv".format(today_str()),
+                        ["Raw material", "Unit", "Opening", "Bought", "Bought value", "Used",
+                         "Used in (product: qty)", "Left", "Avg cost", "Left value"], out)
+
+        if kind == "production":
+            rows = conn.query(
+                "SELECT * FROM productions WHERE prod_date >= ? AND prod_date <= ? ORDER BY prod_date, id",
+                (start, end))
+            out = []
+            for r in rows:
+                for l in conn.query("SELECT * FROM production_lines WHERE production_id = ? ORDER BY id", (r["id"],)):
+                    out.append([r["batch_no"], r["prod_date"], r["product_name"], r["qty_out"],
+                                l["raw_name"], l["qty"], l["cost_rate"], l["cost"],
+                                r["other_cost"], r["total_cost"]])
+            return _csv("production-{}-to-{}.csv".format(start, end),
+                        ["Batch", "Date", "Product", "Qty made", "Raw material", "Qty used",
+                         "Cost rate", "Cost", "Other cost", "Batch total cost"], out)
 
         if kind == "gst":
             rep = _report(conn, start, end)

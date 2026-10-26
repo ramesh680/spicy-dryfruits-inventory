@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Batch {{ doc.batch_no }}</h1>
+    <p class="sub">{{ doc.product_name }} &middot; {{ doc.qty_out|qty }} {{ unit }} &middot; {{ doc.prod_date|dmy }}</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('production') }}">Back to register</a>
+    <a class="btn" href="{{ url_for('production_new', product=doc.product_id) }}">Make another</a>
+    {% if is_admin %}
+    <a class="btn" href="{{ url_for('production_edit', pid=doc.id) }}">Edit</a>
+    <form method="post" action="{{ url_for('production_delete', pid=doc.id) }}" class="inline"
+          onsubmit="return confirm('Delete this batch? Its raw materials go back into stock. This cannot be undone.')">
+      <button class="btn danger" type="submit">Delete</button></form>
+    {% else %}<a class="btn" href="{{ url_for('admin', next=request.full_path) }}">Unlock to edit</a>{% endif %}
+  </div>
+</div>
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <div class="stat"><div class="label">Made</div><div class="value">{{ doc.qty_out|qty }} {{ unit }}</div></div>
+  <div class="stat"><div class="label">Raw input</div><div class="value">{{ total_in|qty }}</div><div class="note">yield {{ yield_pct }}% of input weight</div></div>
+  <div class="stat"><div class="label">Batch cost</div><div class="value">&#8377;{{ doc.total_cost|inr }}</div></div>
+  <div class="stat accent"><div class="label">Cost per {{ unit }}</div><div class="value">&#8377;{{ unit_cost|inr }}</div></div>
+</div>
+
+<div class="card">
+  <h2>Raw materials used</h2>
+  <div class="tw"><table>
+    <thead><tr><th>Raw material</th><th class="num">Qty used</th><th class="num">Share of input</th><th class="num">Cost rate</th><th class="num">Cost</th></tr></thead>
+    <tbody>{% for l in lines %}<tr>
+      <td>{{ l.raw_name }}</td>
+      <td class="num">{{ l.qty|qty }} <span class="muted small">{{ l.unit or '' }}</span></td>
+      <td class="num">{{ ((l.qty / total_in * 100) if total_in else 0)|round(1) }}%</td>
+      <td class="num">&#8377;{{ l.cost_rate|inr }}</td>
+      <td class="num">&#8377;{{ l.cost|inr }}</td>
+    </tr>{% endfor %}</tbody>
+    <tfoot>
+      <tr><td colspan="4">Raw materials</td><td class="num">&#8377;{{ doc.raw_cost|inr }}</td></tr>
+      <tr><td colspan="4">Other costs</td><td class="num">&#8377;{{ doc.other_cost|inr }}</td></tr>
+      <tr><td colspan="4">Batch total</td><td class="num" style="font-size:1.05rem">&#8377;{{ doc.total_cost|inr }}</td></tr>
+    </tfoot>
+  </table></div>
+  {% if doc.notes %}<p class="note-line">{{ doc.notes }}</p>{% endif %}
+</div>
+{% endblock %}

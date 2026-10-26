@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% block title %}{{ 'Set admin PIN' if first_time else 'Unlock admin' }}{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <h1>{{ 'Set your admin PIN' if first_time else 'Unlock admin' }}</h1>
+    <p class="sub">
+      {% if first_time %}Choose a PIN. You&rsquo;ll need it to change or delete an entry &mdash; recording new sales and purchases never asks for it.
+      {% else %}Needed to edit or delete an entry. Recording new ones does not need it.{% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="card" style="max-width:460px">
+  <form method="post">
+    <input type="hidden" name="next" value="{{ next }}">
+    {% if first_time %}
+    <div class="field">
+      <label for="pin">New PIN</label>
+      <input type="password" id="pin" name="pin" minlength="4" required autocomplete="new-password" autofocus>
+    </div>
+    <div class="field">
+      <label for="confirm">Repeat it</label>
+      <input type="password" id="confirm" name="confirm" minlength="4" required autocomplete="new-password">
+    </div>
+    <button class="btn primary block" type="submit">Set PIN and unlock</button>
+    <p class="note-line">Four characters or more. It is stored hashed &mdash; not even the database holds the PIN itself. If you forget it, it can be reset from Settings while unlocked, so keep a note somewhere safe.</p>
+    {% else %}
+    <div class="field">
+      <label for="pin">Admin PIN</label>
+      <input type="password" id="pin" name="pin" required autocomplete="current-password" autofocus>
+    </div>
+    <button class="btn primary block" type="submit">{{ icons.ic('gear', 15) }} Unlock</button>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}

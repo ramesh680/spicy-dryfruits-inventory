@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% block title %}Quick sale{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <h1>Quick sale</h1>
+    <p class="sub">Tap an item, type the weight, save. Invoice {{ next_no }} &middot; <span id="supply-tag" class="badge b-green">CGST + SGST</span></p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('sale_new') }}">{{ icons.ic('tag', 15) }} Full invoice form</a>
+  </div>
+</div>
+
+<form method="post" id="qform"
+      data-items='{{ items_json }}'
+      data-party-states='{{ party_states_json }}'
+      data-home-state="{{ s.state_code }}"
+      data-gst-enabled="{{ 1 if s.gst_enabled else 0 }}">
+  <input type="hidden" name="invoice_date" value="{{ today }}">
+
+  <div class="grid g2">
+    <div class="card">
+      <h2>Pick items</h2>
+      <p class="sub">Rate is the item&rsquo;s default &mdash; change it on the line if today&rsquo;s price differs.</p>
+      <div class="field">
+        <label for="filter">Search</label>
+        <input type="search" id="filter" placeholder="Start typing an item name&hellip;" autocomplete="off">
+      </div>
+      <div class="tiles" id="tiles">
+        {% for i in items %}
+        <button type="button" class="tile" data-id="{{ i.id }}" data-name="{{ i.name }}">
+          <div class="t-nm">{{ i.name }}</div>
+          <div class="t-meta">
+            <span class="t-rate">&#8377;{{ i.sale_rate|inr }}</span>
+            <span>{{ i.stock_qty|qty }} {{ i.unit }}</span>
+          </div>
+        </button>
+        {% else %}
+        <div class="empty"><strong>No items yet</strong>Add your products on the Items page first.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>This sale</h2>
+      <p class="sub" id="cart-sub">Nothing added yet.</p>
+      <div id="cart"></div>
+
+      <div class="row r2" style="margin-top:1rem">
+        <div class="field">
+          <label for="party_id">Customer</label>
+          <select id="party_id" name="party_id">
+            <option value="">Walk-in / cash</option>
+            {% for p in parties %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="payment_mode">Payment</label>
+          <select id="payment_mode" name="payment_mode">
+            {% for m in PAYMENT_MODES %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="qbar">
+        <div>
+          <div class="q-lbl">Total incl. GST</div>
+          <div class="q-tot">&#8377;<span id="q-total">0</span></div>
+        </div>
+        <div class="small muted" id="q-break" style="flex:1">&nbsp;</div>
+        <button type="submit" class="btn primary" id="q-save" disabled>Save &amp; print invoice</button>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var form = document.getElementById('qform');
+  var ITEMS = {}; JSON.parse(form.dataset.items || '[]').forEach(function (i) { ITEMS[String(i.id)] = i; });
+  var STATES = JSON.parse(form.dataset.partyStates || '{}');
+  var HOME = form.dataset.homeState, GST_ON = form.dataset.gstEnabled === '1';
+  var cart = [], cartEl = document.getElementById('cart');
+
+  function inr(n) {
+    var v = (Math.round((n + Number.EPSILON) * 100) / 100).toFixed(2).split('.');
+    var s = v[0], neg = s[0] === '-'; if (neg) s = s.slice(1);
+    if (s.length > 3) { var t = s.slice(-3), h = s.slice(0, -3), o = [];
+      while (h.length > 2) { o.unshift(h.slice(-2)); h = h.slice(0, -2); } if (h) o.unshift(h);
+      s = o.join(',') + ',' + t; }
+    return (neg ? '-' : '') + s + '.' + v[1];
+  }
+  function interstate() {
+    var sel = document.getElementById('party_id');
+    return !!(sel.value && STATES[sel.value] && STATES[sel.value] !== HOME);
+  }
+
+  function draw() {
+    cartEl.textContent = '';
+    cart.forEach(function (line, idx) {
+      var it = ITEMS[line.id];
+      var row = document.createElement('div'); row.className = 'cart-row';
+      var nm = document.createElement('div'); nm.className = 'cr-nm';
+      nm.textContent = it.name;
+      var sub = document.createElement('small');
+      sub.textContent = (GST_ON ? it.gst_rate + '% GST · ' : '') + 'in stock ' + it.stock_qty + ' ' + it.unit;
+      nm.appendChild(sub); row.appendChild(nm);
+
+      [['qty', 'Qty (' + it.unit + ')', line.qty], ['rate', 'Rate', line.rate]].forEach(function (f) {
+        var i = document.createElement('input');
+        i.type = 'number'; i.step = f[0] === 'qty' ? '0.001' : '0.01'; i.min = '0';
+        i.value = f[2]; i.setAttribute('aria-label', f[1] + ' for ' + it.name);
+        i.addEventListener('input', function () { line[f[0]] = parseFloat(i.value) || 0; total(); });
+        row.appendChild(i);
+      });
+
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'btn sm danger'; del.textContent = '×';
+      del.setAttribute('aria-label', 'Remove ' + it.name);
+      del.addEventListener('click', function () {
+        cart.splice(idx, 1);
+        var t = document.querySelector('.tile[data-id="' + line.id + '"]');
+        if (t) t.classList.remove('picked');
+        draw(); total();
+      });
+      row.appendChild(del);
+      cartEl.appendChild(row);
+    });
+    document.getElementById('cart-sub').textContent = cart.length
+      ? cart.length + (cart.length === 1 ? ' item' : ' items') + ' on this sale.'
+      : 'Nothing added yet.';
+    document.getElementById('q-save').disabled = cart.length === 0;
+  }
+
+  function total() {
+    var inter = interstate(), tax = 0, gst = 0, buckets = {};
+    cart.forEach(function (l) {
+      var it = ITEMS[l.id];
+      var t = Math.round((l.qty || 0) * (l.rate || 0) * 100) / 100;
+      var r = GST_ON ? parseFloat(it.gst_rate) : 0;
+      tax += t;
+      if (r > 0) { gst += Math.round(t * r) / 100; buckets[r] = (buckets[r] || 0) + t; }
+    });
+    var grand = Math.round(tax + gst);
+    document.getElementById('q-total').textContent = inr(grand).replace('.00', '');
+    var keys = Object.keys(buckets).sort(function (a, b) { return a - b; });
+    document.getElementById('q-break').textContent = cart.length
+      ? '₹' + inr(tax) + ' taxable + ₹' + inr(gst) + ' '
+        + (GST_ON ? (inter ? 'IGST' : 'CGST+SGST') : 'GST') + (keys.length ? ' (' + keys.join('%, ') + '%)' : '')
+      : ' ';
+    var tag = document.getElementById('supply-tag');
+    tag.textContent = GST_ON ? (inter ? 'IGST' : 'CGST + SGST') : 'GST off';
+    tag.className = 'badge ' + (GST_ON ? (inter ? 'b-amber' : 'b-green') : 'b-grey');
+  }
+
+  document.querySelectorAll('.tile').forEach(function (tile) {
+    tile.addEventListener('click', function () {
+      var id = tile.dataset.id, it = ITEMS[id];
+      var found = cart.filter(function (l) { return l.id === id; })[0];
+      if (found) { found.qty = Math.round((found.qty + 1) * 1000) / 1000; }
+      else { cart.push({ id: id, qty: 1, rate: it.sale_rate || 0 }); tile.classList.add('picked'); }
+      draw(); total();
+    });
+  });
+
+  document.getElementById('filter').addEventListener('input', function (e) {
+    var q = e.target.value.toLowerCase();
+    document.querySelectorAll('.tile').forEach(function (t) {
+      t.style.display = t.dataset.name.toLowerCase().indexOf(q) > -1 ? '' : 'none';
+    });
+  });
+  document.getElementById('party_id').addEventListener('change', total);
+
+  form.addEventListener('submit', function () {
+    cart.forEach(function (l) {
+      [['item_id', l.id], ['qty', l.qty], ['rate', l.rate], ['discount_pct', 0]].forEach(function (f) {
+        var h = document.createElement('input');
+        h.type = 'hidden'; h.name = f[0]; h.value = f[1];
+        form.appendChild(h);
+      });
+    });
+  });
+
+  draw(); total();
+})();
+</script>
+{% endblock %}

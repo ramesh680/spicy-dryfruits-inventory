@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Recipe: {{ product.name }}</h1><p class="sub">How much of each raw material goes into a batch. Used to pre-fill new batches and to work out what you can still make.</p></div>
+  <div class="actions"><a class="btn" href="{{ url_for('raw_materials') }}">Back</a></div>
+</div>
+{% if not raws %}
+<div class="card"><p class="empty"><strong>No raw materials yet</strong>
+  Add your ingredients on the <a href="{{ url_for('items') }}">Items</a> page with type &ldquo;Raw material&rdquo;.</p></div>
+{% else %}
+<form method="post" class="card">
+  <div class="row r3">
+    <div class="field"><label for="per_qty">For a batch of ({{ product.unit }})</label>
+      <input type="number" id="per_qty" name="per_qty" step="0.001" min="0.001" value="1">
+      <p class="small muted" style="margin:.3rem 0 0">e.g. enter 10 and the quantities for a 10 {{ product.unit }} batch.</p></div>
+  </div>
+  {% set have = {} %}{% for l in recipe %}{% set _ = have.update({l.raw_id: l.qty_per_unit}) %}{% endfor %}
+  <div class="tw"><table>
+    <thead><tr><th>Raw material</th><th class="num" style="width:160px">Quantity</th><th>Unit</th></tr></thead>
+    <tbody>{% for r in raws %}<tr>
+      <td>{{ r.name }}<input type="hidden" name="raw_id" value="{{ r.id }}"></td>
+      <td class="num"><input type="number" name="raw_qty" step="0.001" min="0" style="text-align:right"
+             value="{{ have.get(r.id)|qty if have.get(r.id) else '' }}" placeholder="0"></td>
+      <td class="muted small">{{ r.unit }}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="note-line">Leave a raw material blank if it isn&rsquo;t in this product. Clearing every row removes the recipe.</p>
+  <div class="btn-row" style="margin-top:1rem"><button class="btn primary" type="submit">Save recipe</button></div>
+</form>
+{% endif %}
+{% endblock %}
