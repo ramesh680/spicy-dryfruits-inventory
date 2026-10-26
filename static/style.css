@@ -363,3 +363,18 @@ hr{border:none;border-top:1px solid var(--border);margin:1.1rem 0}
   .invoice{border:none;box-shadow:none;padding:0;max-width:none;border-radius:0}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ---------------------------------------------------------- sign-in */
+.auth-wrap{min-height:100vh;display:grid;place-items:center;padding:1.5rem 1rem;
+  padding-top:max(1.5rem, env(safe-area-inset-top));padding-bottom:max(1.5rem, env(safe-area-inset-bottom))}
+.auth-card{width:100%;max-width:420px;margin:0}
+.auth-brand{padding:0 0 1.1rem}
+.auth-card h1{font-size:1.25rem;margin-bottom:.3rem}
+.auth-sub{color:var(--text-2);font-size:.86rem;margin:0 0 1.1rem}
+.link-card{border-color:var(--accent-solid)}
+.link-row{display:flex;gap:.5rem}
+.link-row input{flex:1;min-width:0;font-size:.8rem}
+.actions{white-space:nowrap}
+.actions form.inline{display:inline}
+.user-chip{display:flex;align-items:center;gap:.4rem;padding:.45rem .55rem;font-size:.78rem;color:var(--text-2);overflow:hidden}
+.user-chip a{color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
