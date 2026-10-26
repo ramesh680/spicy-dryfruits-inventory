@@ -280,6 +280,22 @@ SCHEMA = [
         cost_rate {NUM} NOT NULL DEFAULT 0,
         cost {NUM} NOT NULL DEFAULT 0
     )""",
+    """CREATE TABLE IF NOT EXISTS users (
+        id {PK},
+        email TEXT NOT NULL UNIQUE,
+        name TEXT DEFAULT '',
+        role TEXT NOT NULL DEFAULT 'member',
+        active INTEGER NOT NULL DEFAULT 1,
+        pw_hash TEXT DEFAULT '',
+        pw_salt TEXT DEFAULT '',
+        token_hash TEXT DEFAULT '',
+        token_expires TEXT DEFAULT '',
+        session_version INTEGER NOT NULL DEFAULT 1,
+        failed_count INTEGER NOT NULL DEFAULT 0,
+        locked_until TEXT DEFAULT '',
+        last_login TEXT DEFAULT '',
+        created_at TEXT DEFAULT ''
+    )""",
     "CREATE INDEX IF NOT EXISTS idx_pl_purchase ON purchase_lines(purchase_id)",
     "CREATE INDEX IF NOT EXISTS idx_prl_prod ON production_lines(production_id)",
     "CREATE INDEX IF NOT EXISTS idx_rl_product ON recipe_lines(product_id)",
@@ -306,11 +322,22 @@ SEED_ITEMS = [
 ]
 
 
+# People allowed to sign in on a brand-new install. Only used while the users
+# table is empty, so removing someone later from the Users page sticks.
+SEED_USERS = [
+    # email, name, role ('owner' can manage who has access)
+    ("ramesh.goswami100@gmail.com", "Ramesh Goswami", "owner"),
+    ("saurabhsethi9211@gmail.com", "Saurabh Sethi", "owner"),
+]
+
+
 # Columns added after the first release. CREATE TABLE IF NOT EXISTS leaves an
 # existing table alone, so these are applied by hand on every start.
 MIGRATIONS = [
     ("settings", "admin_hash", "TEXT DEFAULT ''"),
     ("settings", "admin_salt", "TEXT DEFAULT ''"),
+    # random key that signs login sessions when SECRET_KEY is not set
+    ("settings", "app_secret", "TEXT DEFAULT ''"),
     ("sales", "updated_at", "TEXT DEFAULT ''"),
     ("sales", "edit_count", "INTEGER NOT NULL DEFAULT 0"),
     ("purchases", "updated_at", "TEXT DEFAULT ''"),
@@ -350,6 +377,9 @@ def init_db():
         row = conn.query_one("SELECT id FROM settings WHERE id = 1")
         if not row:
             conn.execute("INSERT INTO settings (id) VALUES (1)")
+        if not conn.scalar("SELECT COUNT(*) AS c FROM users"):
+            for email, name, role in SEED_USERS:
+                conn.insert("users", dict(email=email, name=name, role=role, created_at=""))
         n = conn.scalar("SELECT COUNT(*) AS c FROM items")
         if not n:
             for name, hsn, rate, unit, low, srate in SEED_ITEMS:

@@ -2,7 +2,9 @@
 import hashlib
 import hmac
 import os
-from datetime import date, datetime
+import re
+import secrets
+from datetime import date, datetime, timedelta
 
 from db import get_db
 
@@ -381,3 +383,31 @@ def check_pin(pin, stored_hash, salt):
     except ValueError:
         return False
     return hmac.compare_digest(candidate, stored_hash)
+
+
+# ------------------------------------------------------------ sign-in
+
+def normalize_email(email):
+    return (email or "").strip().lower()
+
+
+def valid_email(email):
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email or ""))
+
+
+def new_token():
+    """A one-time link token. Only its SHA-256 is stored."""
+    token = secrets.token_urlsafe(32)
+    return token, token_hash(token)
+
+
+def token_hash(token):
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def now_iso():
+    return datetime.utcnow().replace(microsecond=0).isoformat()
+
+
+def iso_after(**delta):
+    return (datetime.utcnow() + timedelta(**delta)).replace(microsecond=0).isoformat()

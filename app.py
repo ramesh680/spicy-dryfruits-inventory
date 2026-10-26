@@ -7,18 +7,34 @@ from datetime import date, datetime, timedelta
 
 from functools import wraps
 
-from flask import (Flask, Response, flash, redirect, render_template, request,
-                   session, url_for)
+from flask import (Flask, Response, abort, flash, g, redirect, render_template,
+                   request, session, url_for)
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import charts
 import core
 from core import (GST_RATES, PAYMENT_MODES, STATE_CODES, STATE_NAME, UNITS,
                   amount_in_words, compute_line, money, qty, rate_wise_breakup,
                   today_str, totals_from_lines)
-from db import get_db, init_db
+from db import IS_PG, get_db, init_db
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+# Render sits behind a proxy; trust its scheme/host so invite links are https.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=bool(os.environ.get("RENDER")),
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
+
+MIN_PASSWORD = 8
+MAX_FAILED_LOGINS = 5
+LOCKOUT_MINUTES = 15
+LINK_DAYS = 7
+# Pages anyone can open without signing in.
+PUBLIC_ENDPOINTS = {"login", "logout", "set_password", "owner_setup", "static", "healthz"}
 
 
 # --------------------------------------------------------------- helpers
@@ -167,7 +183,9 @@ def parse_lines(conn, gst_enabled, interstate):
 def inject_globals():
     return dict(STATE_CODES=STATE_CODES, STATE_NAME=STATE_NAME,
                 GST_RATES=GST_RATES, UNITS=UNITS, PAYMENT_MODES=PAYMENT_MODES,
-                today=today_str(), is_admin=is_admin())
+                today=today_str(), is_admin=is_admin(),
+                me=current_user() if request.endpoint not in ("static", "healthz") else None,
+                is_owner=is_owner() if request.endpoint not in ("static", "healthz") else False)
 
 
 @app.template_filter("inr")
@@ -1185,12 +1203,309 @@ def settings():
         return render_template("settings.html", s=get_settings(conn))
 
 
+# ----------------------------------------------------------- sign-in gate
+
+def current_user():
+    """The signed-in user, re-checked against the database on every request so a
+    removed, disabled or password-changed account is signed out at once."""
+    if "user" in g:
+        return g.user
+    g.user = None
+    uid = session.get("uid")
+    if uid:
+        with get_db() as conn:
+            u = conn.query_one("SELECT * FROM users WHERE id = ?", (uid,))
+        if u and u["active"] and u["pw_hash"] and u["session_version"] == session.get("sv"):
+            g.user = u
+        else:
+            session.pop("uid", None)
+            session.pop("sv", None)
+    return g.user
+
+
+def is_owner():
+    u = current_user()
+    return bool(u and u["role"] == "owner")
+
+
+def owner_required(view):
+    @wraps(view)
+    def guard(*args, **kwargs):
+        if not is_owner():
+            abort(403)
+        return view(*args, **kwargs)
+    return guard
+
+
+def safe_next(target):
+    """Only ever send people back to a page on this site."""
+    if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
+        return target
+    return url_for("dashboard")
+
+
+@app.before_request
+def require_login():
+    if request.endpoint in PUBLIC_ENDPOINTS or request.endpoint is None:
+        return None
+    if current_user():
+        return None
+    if request.method == "GET":
+        return redirect(url_for("login", next=request.full_path.rstrip("?")))
+    return redirect(url_for("login"))
+
+
+def start_session(conn, u):
+    session.clear()
+    session.permanent = True
+    session["uid"] = u["id"]
+    session["sv"] = u["session_version"]
+    conn.execute("UPDATE users SET failed_count = 0, locked_until = '', last_login = ? WHERE id = ?",
+                 (core.now_iso(), u["id"]))
+
+
+def setup_code_ok(conn, code):
+    """Proves the first owner sign-up is really the owner: the existing admin PIN
+    or a SETUP_CODE env var. A local install with neither needs no code."""
+    s = get_settings(conn)
+    env_code = os.environ.get("SETUP_CODE", "").strip()
+    if env_code and code and core.hmac.compare_digest(code, env_code):
+        return True
+    if admin_configured(s) and core.check_pin(code, s["admin_hash"], s["admin_salt"]):
+        return True
+    return not env_code and not admin_configured(s) and not IS_PG
+
+
+def needs_owner_setup(conn):
+    return not conn.scalar("SELECT COUNT(*) AS c FROM users WHERE pw_hash <> '' AND active = 1")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    nxt = safe_next(request.values.get("next"))
+    if current_user():
+        return redirect(nxt)
+    with get_db() as conn:
+        s = get_settings(conn)
+        if needs_owner_setup(conn):
+            return redirect(url_for("owner_setup", next=nxt))
+        email = core.normalize_email(f("email"))
+        if request.method == "POST":
+            u = conn.query_one("SELECT * FROM users WHERE email = ?", (email,))
+            now = core.now_iso()
+            if u and u["locked_until"] and u["locked_until"] > now:
+                flash("Too many wrong tries. Wait {} minutes and try again.".format(LOCKOUT_MINUTES), "error")
+            elif u and u["active"] and u["pw_hash"] and core.check_pin(f("password"), u["pw_hash"], u["pw_salt"]):
+                start_session(conn, u)
+                return redirect(nxt)
+            else:
+                if not (u and u["pw_hash"]):
+                    core.hash_pin("x", "00" * 16)   # same work either way, so timing reveals nothing
+                if u and u["active"] and not u["pw_hash"]:
+                    flash("Your access is ready but not activated. Ask the owner for your set-password link.", "warn")
+                else:
+                    if u:
+                        fails = (u["failed_count"] or 0) + 1
+                        lock = core.iso_after(minutes=LOCKOUT_MINUTES) if fails >= MAX_FAILED_LOGINS else ""
+                        conn.execute("UPDATE users SET failed_count = ?, locked_until = ? WHERE id = ?",
+                                     (0 if lock else fails, lock, u["id"]))
+                    flash("That email and password do not match an account with access.", "error")
+        return render_template("login.html", s=s, mode="login", next=nxt, email=email)
+
+
+@app.route("/setup", methods=["GET", "POST"])
+def owner_setup():
+    """First run only: an owner on the access list sets their password."""
+    nxt = safe_next(request.values.get("next"))
+    with get_db() as conn:
+        s = get_settings(conn)
+        if not needs_owner_setup(conn):
+            return redirect(url_for("login", next=nxt))
+        need_code = not setup_code_ok(conn, "")
+        email = core.normalize_email(f("email"))
+        if request.method == "POST":
+            u = conn.query_one("SELECT * FROM users WHERE email = ? AND role = 'owner' AND active = 1", (email,))
+            pw, confirm = f("password"), f("confirm")
+            if not u:
+                flash("That email is not an owner on this tool's access list.", "error")
+            elif need_code and not setup_code_ok(conn, f("code")):
+                flash("The setup code is not right.", "error")
+            elif len(pw) < MIN_PASSWORD:
+                flash("Choose a password of at least {} characters.".format(MIN_PASSWORD), "error")
+            elif pw != confirm:
+                flash("The two passwords did not match.", "error")
+            else:
+                h, salt = core.make_pin(pw)
+                conn.execute("UPDATE users SET pw_hash = ?, pw_salt = ?, token_hash = '', "
+                             "session_version = session_version + 1 WHERE id = ?", (h, salt, u["id"]))
+                u = conn.query_one("SELECT * FROM users WHERE id = ?", (u["id"],))
+                start_session(conn, u)
+                flash("Password set. You are signed in.", "ok")
+                return redirect(nxt)
+        return render_template("login.html", s=s, mode="setup", next=nxt, email=email,
+                               need_code=need_code, has_pin=admin_configured(s))
+
+
+@app.route("/set-password/<token>", methods=["GET", "POST"])
+def set_password(token):
+    """Where an invite or reset link lands."""
+    with get_db() as conn:
+        s = get_settings(conn)
+        u = conn.query_one("SELECT * FROM users WHERE token_hash = ? AND token_hash <> ''",
+                           (core.token_hash(token),))
+        if not u or not u["active"] or (u["token_expires"] or "") < core.now_iso():
+            flash("This link has expired or was already used. Ask the owner for a new one.", "error")
+            return render_template("login.html", s=s, mode="dead_link", next="", email="")
+        if request.method == "POST":
+            pw, confirm = f("password"), f("confirm")
+            if len(pw) < MIN_PASSWORD:
+                flash("Choose a password of at least {} characters.".format(MIN_PASSWORD), "error")
+            elif pw != confirm:
+                flash("The two passwords did not match.", "error")
+            else:
+                h, salt = core.make_pin(pw)
+                conn.execute("UPDATE users SET pw_hash = ?, pw_salt = ?, token_hash = '', token_expires = '', "
+                             "session_version = session_version + 1 WHERE id = ?", (h, salt, u["id"]))
+                u = conn.query_one("SELECT * FROM users WHERE id = ?", (u["id"],))
+                start_session(conn, u)
+                flash("Password set. Welcome!", "ok")
+                return redirect(url_for("dashboard"))
+        return render_template("login.html", s=s, mode="set", next="", email=u["email"])
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.clear()
+    flash("Signed out.", "ok")
+    return redirect(url_for("login"))
+
+
+@app.route("/account", methods=["GET", "POST"])
+def account():
+    u = current_user()
+    with get_db() as conn:
+        s = get_settings(conn)
+        if request.method == "POST":
+            if not core.check_pin(f("current"), u["pw_hash"], u["pw_salt"]):
+                flash("Your current password is not right.", "error")
+            elif len(f("password")) < MIN_PASSWORD:
+                flash("Choose a password of at least {} characters.".format(MIN_PASSWORD), "error")
+            elif f("password") != f("confirm"):
+                flash("The two new passwords did not match.", "error")
+            else:
+                h, salt = core.make_pin(f("password"))
+                conn.execute("UPDATE users SET pw_hash = ?, pw_salt = ?, session_version = session_version + 1 "
+                             "WHERE id = ?", (h, salt, u["id"]))
+                u = conn.query_one("SELECT * FROM users WHERE id = ?", (u["id"],))
+                start_session(conn, u)   # stay signed in here; every other device is signed out
+                flash("Password changed. Other devices have been signed out.", "ok")
+            return redirect(url_for("account"))
+        return render_template("account.html", s=s, u=u)
+
+
+def issue_link(conn, user_id):
+    token, th = core.new_token()
+    conn.execute("UPDATE users SET token_hash = ?, token_expires = ? WHERE id = ?",
+                 (th, core.iso_after(days=LINK_DAYS), user_id))
+    return url_for("set_password", token=token, _external=True)
+
+
+@app.route("/users")
+@owner_required
+def users():
+    with get_db() as conn:
+        rows = conn.query("SELECT * FROM users ORDER BY role DESC, email")
+        return render_template("users.html", s=get_settings(conn), rows=rows,
+                               new_link=session.pop("new_link", None), now=core.now_iso(),
+                               me=current_user(), link_days=LINK_DAYS)
+
+
+@app.route("/users/add", methods=["POST"])
+@owner_required
+def users_add():
+    email = core.normalize_email(f("email"))
+    role = "owner" if f("role") == "owner" else "member"
+    if not core.valid_email(email):
+        flash("Enter a valid email address.", "error")
+        return redirect(url_for("users"))
+    with get_db() as conn:
+        u = conn.query_one("SELECT * FROM users WHERE email = ?", (email,))
+        if u:
+            conn.execute("UPDATE users SET active = 1, role = ?, name = ? WHERE id = ?",
+                         (role, f("name") or u["name"], u["id"]))
+            uid = u["id"]
+        else:
+            uid = conn.insert("users", dict(email=email, name=f("name"), role=role, created_at=core.now_iso()))
+        if (u or {}).get("pw_hash"):
+            flash("{} already had an account; access is on.".format(email), "ok")
+        else:
+            session["new_link"] = dict(email=email, url=issue_link(conn, uid), kind="invite")
+            flash("Access granted to {}. Send them the link below to set a password.".format(email), "ok")
+    return redirect(url_for("users"))
+
+
+def _other_owners(conn, uid):
+    return conn.scalar("SELECT COUNT(*) AS c FROM users WHERE role = 'owner' AND active = 1 AND id <> ?", (uid,))
+
+
+@app.route("/users/<int:uid>/<action>", methods=["POST"])
+@owner_required
+def users_action(uid, action):
+    me = current_user()
+    with get_db() as conn:
+        u = conn.query_one("SELECT * FROM users WHERE id = ?", (uid,))
+        if not u:
+            abort(404)
+        if action == "link":
+            kind = "reset" if u["pw_hash"] else "invite"
+            session["new_link"] = dict(email=u["email"], url=issue_link(conn, uid), kind=kind)
+            flash("New link made for {}. Any earlier link for them no longer works.".format(u["email"]), "ok")
+        elif action in ("disable", "remove", "member") and uid == me["id"]:
+            flash("You cannot do that to your own account.", "error")
+        elif action in ("disable", "remove", "member") and u["role"] == "owner" and not _other_owners(conn, uid):
+            flash("Keep at least one owner who can manage access.", "error")
+        elif action == "disable":
+            conn.execute("UPDATE users SET active = 0, token_hash = '', session_version = session_version + 1 "
+                         "WHERE id = ?", (uid,))
+            flash("{} can no longer sign in.".format(u["email"]), "ok")
+        elif action == "enable":
+            conn.execute("UPDATE users SET active = 1, failed_count = 0, locked_until = '' WHERE id = ?", (uid,))
+            flash("{} can sign in again.".format(u["email"]), "ok")
+        elif action == "remove":
+            conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+            flash("{} was removed.".format(u["email"]), "ok")
+        elif action == "owner":
+            conn.execute("UPDATE users SET role = 'owner' WHERE id = ?", (uid,))
+            flash("{} can now manage access.".format(u["email"]), "ok")
+        elif action == "member":
+            conn.execute("UPDATE users SET role = 'member' WHERE id = ?", (uid,))
+            flash("{} is now a regular user.".format(u["email"]), "ok")
+        else:
+            abort(404)
+    return redirect(url_for("users"))
+
+
 @app.route("/healthz")
 def healthz():
     return {"ok": True}
 
 
 init_db()
+
+
+def _load_secret():
+    """Without SECRET_KEY, sign sessions with a random key kept in the database
+    rather than a guessable default, so nobody can forge a login cookie."""
+    if os.environ.get("SECRET_KEY"):
+        return
+    with get_db() as conn:
+        conn.execute("UPDATE settings SET app_secret = ? WHERE id = 1 AND "
+                     "(app_secret IS NULL OR app_secret = '')", (os.urandom(32).hex(),))
+    with get_db() as conn:   # re-read: another worker may have written first
+        app.secret_key = conn.scalar("SELECT app_secret FROM settings WHERE id = 1")
+
+
+_load_secret()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)

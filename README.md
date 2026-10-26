@@ -183,3 +183,23 @@ static/             design tokens and stylesheet, entry-form and chart scripts
 tests/test_app.py   end-to-end checks
 render.yaml         Render blueprint: web service + Postgres
 ```
+
+## Sign-in and access
+
+Every page needs a sign-in (email + password). Only `/healthz` stays open for Render.
+
+- **Who has access** is the Users & access page (owners only). An owner adds an
+  email, the app shows a one-time *invite link* (valid 7 days), and the owner
+  sends it to that person, who chooses their own password. The same button
+  makes a *reset link* for someone who forgot theirs.
+- **Roles:** *Owner* can manage access; *User* can use the tool. There is always
+  at least one owner, and nobody can disable or remove themself.
+- **First run:** the access list starts with ramesh.goswami100@gmail.com and
+  saurabhsethi9211@gmail.com, both owners. The first owner opens the site and
+  sets a password at `/setup`, proving it is them with the existing **admin PIN**
+  (or, if no PIN was ever set, a `SETUP_CODE` environment variable added on
+  Render). That owner then sends the other one an invite link from Users & access.
+- Passwords are stored hashed (PBKDF2-SHA256). Five wrong tries lock an account
+  for 15 minutes. Disabling someone or changing a password signs out their
+  other sessions immediately.
+- The admin PIN for editing/deleting entries still works as before.
