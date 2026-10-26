@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in &middot; {{ s.business_name }}</title>
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('sdf-theme');
+      if (!t) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  })();
+</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=3">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%8C%B0</text></svg>">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card card">
+    <div class="brand auth-brand">
+      <span class="mark">{{ (s.business_name or 'S')[:1]|upper }}</span>
+      <span>{{ s.business_name }}</span>
+    </div>
+
+    {% with msgs = get_flashed_messages(with_categories=true) %}
+      {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+    {% endwith %}
+
+    {% if mode == 'login' %}
+      <h1>Sign in</h1>
+      <p class="sub auth-sub">Only people the owner has given access can use this tool.</p>
+      <form method="post" action="{{ url_for('login') }}">
+        <input type="hidden" name="next" value="{{ next }}">
+        <div class="field"><label for="email">Email</label>
+          <input type="email" id="email" name="email" value="{{ email }}" required autocomplete="username" {{ '' if email else 'autofocus' }}></div>
+        <div class="field"><label for="password">Password</label>
+          <input type="password" id="password" name="password" required autocomplete="current-password" {{ 'autofocus' if email }}></div>
+        <button class="btn primary block" type="submit">Sign in</button>
+      </form>
+      <p class="note-line">Forgot your password, or new here? Ask the owner for a set-password link.</p>
+
+    {% elif mode == 'setup' %}
+      <h1>Set up the owner account</h1>
+      <p class="sub auth-sub">First sign-in on this install. Use an owner email from the access list and choose a password.</p>
+      <form method="post" action="{{ url_for('owner_setup') }}">
+        <input type="hidden" name="next" value="{{ next }}">
+        <div class="field"><label for="email">Owner email</label>
+          <input type="email" id="email" name="email" value="{{ email }}" required autocomplete="username" autofocus></div>
+        {% if need_code %}
+        <div class="field"><label for="code">{{ 'Your current admin PIN' if has_pin else 'Setup code' }}</label>
+          <input type="password" id="code" name="code" required autocomplete="off">
+          <div class="note-line" style="margin-top:.35rem">{% if has_pin %}The PIN you already use to unlock editing &mdash; it proves you are the owner.{% else %}The SETUP_CODE value set on the server.{% endif %}</div></div>
+        {% endif %}
+        <div class="field"><label for="password">New password</label>
+          <input type="password" id="password" name="password" minlength="{{ 8 }}" required autocomplete="new-password"></div>
+        <div class="field"><label for="confirm">Repeat it</label>
+          <input type="password" id="confirm" name="confirm" minlength="8" required autocomplete="new-password"></div>
+        <button class="btn primary block" type="submit">Set password and sign in</button>
+      </form>
+
+    {% elif mode == 'set' %}
+      <h1>Choose your password</h1>
+      <p class="sub auth-sub">For <strong>{{ email }}</strong>. You&rsquo;ll sign in with this email and password from now on.</p>
+      <form method="post">
+        <input type="hidden" name="email" value="{{ email }}" autocomplete="username">
+        <div class="field"><label for="password">Password</label>
+          <input type="password" id="password" name="password" minlength="8" required autocomplete="new-password" autofocus></div>
+        <div class="field"><label for="confirm">Repeat it</label>
+          <input type="password" id="confirm" name="confirm" minlength="8" required autocomplete="new-password"></div>
+        <button class="btn primary block" type="submit">Save and sign in</button>
+      </form>
+      <p class="note-line">At least 8 characters. It is stored hashed &mdash; nobody, including the owner, can see it.</p>
+
+    {% else %}
+      <h1>Link not valid</h1>
+      <p class="sub auth-sub">Links work once and expire after a week.</p>
+      <a class="btn block" href="{{ url_for('login') }}">Go to sign in</a>
+    {% endif %}
+  </div>
+</div>
+</body>
+</html>

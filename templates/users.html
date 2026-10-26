@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Users &amp; access{% endblock %}
+{% block body %}
+<div class="page-head"><div><h1>Users &amp; access</h1><p>Who can sign in. Owners can also manage this list.</p></div></div>
+
+{% if new_link %}
+<div class="card link-card">
+  <h2>{{ 'Invite' if new_link.kind == 'invite' else 'Password reset' }} link for {{ new_link.email }}</h2>
+  <p class="sub">Send this to them yourself (WhatsApp, email). It works once and expires in {{ link_days }} days. It is shown only now &mdash; make a new one if it gets lost.</p>
+  <div class="link-row">
+    <input id="new-link" class="mono" value="{{ new_link.url }}" readonly onclick="this.select()">
+    <button class="btn primary" type="button" id="copy-link">Copy</button>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Give someone access</h2>
+  <form method="post" action="{{ url_for('users_add') }}">
+    <div class="row r3">
+      <div class="field"><label for="u-email">Email</label><input type="email" id="u-email" name="email" required placeholder="name@gmail.com"></div>
+      <div class="field"><label for="u-name">Name <span class="muted">(optional)</span></label><input id="u-name" name="name"></div>
+      <div class="field"><label for="u-role">Role</label>
+        <select id="u-role" name="role"><option value="member">User &ndash; uses the tool</option><option value="owner">Owner &ndash; also manages access</option></select></div>
+    </div>
+    <button class="btn primary" type="submit">Grant access</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>People with access</h2>
+  <div class="tw"><table>
+    <thead><tr><th>Person</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      {% set mine = r.id == me.id %}
+      <tr>
+        <td>{{ r.email }}{% if mine %} <span class="muted small">(you)</span>{% endif %}<div class="small muted">{{ r.name }}</div></td>
+        <td>{% if r.role == 'owner' %}<span class="badge b-blue">Owner</span>{% else %}<span class="badge b-grey">User</span>{% endif %}</td>
+        <td>
+          {% if not r.active %}<span class="badge b-red">Disabled</span>
+          {% elif not r.pw_hash %}<span class="badge b-amber">Invite pending</span>
+          {% elif r.locked_until and r.locked_until > now %}<span class="badge b-red">Locked 15 min</span>
+          {% else %}<span class="badge b-green">Active</span>{% endif %}
+        </td>
+        <td class="small">{{ r.last_login.replace('T', ' ')[:16] ~ ' UTC' if r.last_login else '-' }}</td>
+        <td class="num actions">
+          {% if r.active %}
+          <form method="post" action="{{ url_for('users_action', uid=r.id, action='link') }}" class="inline">
+            <button class="btn sm" type="submit">{{ 'Reset link' if r.pw_hash else 'Invite link' }}</button></form>
+          {% endif %}
+          {% if not mine %}
+            {% if r.role == 'owner' %}
+            <form method="post" action="{{ url_for('users_action', uid=r.id, action='member') }}" class="inline"><button class="btn sm" type="submit">Make user</button></form>
+            {% else %}
+            <form method="post" action="{{ url_for('users_action', uid=r.id, action='owner') }}" class="inline"><button class="btn sm" type="submit">Make owner</button></form>
+            {% endif %}
+            {% if r.active %}
+            <form method="post" action="{{ url_for('users_action', uid=r.id, action='disable') }}" class="inline"
+                  onsubmit="return confirm('Stop {{ r.email }} from signing in? They are signed out at once.')"><button class="btn sm danger" type="submit">Disable</button></form>
+            {% else %}
+            <form method="post" action="{{ url_for('users_action', uid=r.id, action='enable') }}" class="inline"><button class="btn sm" type="submit">Enable</button></form>
+            {% endif %}
+            <form method="post" action="{{ url_for('users_action', uid=r.id, action='remove') }}" class="inline"
+                  onsubmit="return confirm('Remove {{ r.email }} from the access list?')"><button class="btn sm danger" type="submit">Remove</button></form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+var cb = document.getElementById('copy-link');
+if (cb) cb.addEventListener('click', function () {
+  var inp = document.getElementById('new-link');
+  inp.select();
+  (navigator.clipboard ? navigator.clipboard.writeText(inp.value) : Promise.reject())
+    .then(function () { cb.textContent = 'Copied'; })
+    .catch(function () { document.execCommand('copy'); cb.textContent = 'Copied'; });
+});
+</script>
+{% endblock %}

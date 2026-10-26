@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Your account{% endblock %}
+{% block body %}
+<div class="page-head"><div><h1>Your account</h1><p>Signed in as <strong>{{ u.email }}</strong>{% if u.role == 'owner' %} &middot; <span class="badge b-blue">Owner</span>{% endif %}</p></div></div>
+
+<div class="card" style="max-width:460px">
+  <h2>Change password</h2>
+  <p class="sub">Changing it signs you out on every other device.</p>
+  <form method="post">
+    <input type="hidden" name="email" value="{{ u.email }}" autocomplete="username">
+    <div class="field"><label for="current">Current password</label>
+      <input type="password" id="current" name="current" required autocomplete="current-password"></div>
+    <div class="field"><label for="password">New password</label>
+      <input type="password" id="password" name="password" minlength="8" required autocomplete="new-password"></div>
+    <div class="field"><label for="confirm">Repeat it</label>
+      <input type="password" id="confirm" name="confirm" minlength="8" required autocomplete="new-password"></div>
+    <button class="btn primary" type="submit">Change password</button>
+  </form>
+</div>
+
+<form method="post" action="{{ url_for('logout') }}"><button class="btn" type="submit">Sign out</button></form>
+{% endblock %}
