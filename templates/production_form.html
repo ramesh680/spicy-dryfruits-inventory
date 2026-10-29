@@ -37,9 +37,14 @@
       <div class="field"><label for="other_cost">Other costs for this batch (&#8377;)</label>
         <input type="number" id="other_cost" name="other_cost" step="0.01" min="0" value="{{ doc.other_cost if doc else 0 }}">
         <p class="small muted" style="margin:.3rem 0 0">Packing, gas, labour &ndash; optional, added to the product&rsquo;s cost.</p></div>
-      <div class="field"><label for="notes">Notes</label>
-        <input type="text" id="notes" name="notes" value="{{ doc.notes if doc else '' }}" placeholder="optional"></div>
+      <div class="field"><label for="other_cost_mode">Other costs paid by</label>
+        <select id="other_cost_mode" name="other_cost_mode">
+          {% for m in PAYMENT_MODES %}<option value="{{ m }}" {{ 'selected' if doc and (doc.other_cost_mode or 'Cash') == m }}>{{ m }}</option>{% endfor %}
+        </select>
+        <p class="small muted" style="margin:.3rem 0 0">So the books take it out of cash, bank, or what you owe.</p></div>
     </div>
+    <div class="field"><label for="notes">Notes</label>
+      <input type="text" id="notes" name="notes" value="{{ doc.notes if doc else '' }}" placeholder="optional"></div>
   </div>
 
   <div class="card">
