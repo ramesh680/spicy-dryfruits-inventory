@@ -1,0 +1,21 @@
+{% import "_icons.html" as icons %}
+{# Tabs across the accounting statements, and the header a printed statement carries. #}
+{% macro tabs(tabs, current) %}
+<div class="seg no-print" role="navigation" aria-label="Statements" style="margin-bottom:1rem">
+  {% for ep, label in tabs %}<a href="{{ url_for(ep) }}" class="{{ 'on' if current == ep }}">{{ label }}</a>{% endfor %}
+</div>
+{% endmacro %}
+
+{% macro print_head(s, title, period) %}
+<div class="print-only print-head">
+  <div class="ph-name">{{ s.business_name }}</div>
+  {% if s.address %}<div class="ph-sub">{{ s.address|replace('\n', ', ') }}</div>{% endif %}
+  {% if s.gstin %}<div class="ph-sub">GSTIN {{ s.gstin }}</div>{% endif %}
+  <div class="ph-title">{{ title }}</div>
+  <div class="ph-sub">{{ period }}</div>
+</div>
+{% endmacro %}
+
+{% macro amt(v) -%}
+{%- if v < 0 -%}<span style="color:var(--red)">({{ (-v)|inr }})</span>{%- else -%}{{ v|inr }}{%- endif -%}
+{%- endmacro %}

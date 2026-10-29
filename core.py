@@ -29,6 +29,8 @@ STATE_NAME = dict(STATE_CODES)
 GST_RATES = [0, 5, 12, 18, 28, 40]
 UNITS = ["kg", "g", "pcs", "box", "packet", "litre"]
 PAYMENT_MODES = ["Cash", "UPI", "Bank Transfer", "Card", "Credit (Udhaar)"]
+# Ways money actually moves (no credit) - for receipts, payments and expenses paid now.
+MONEY_MODES = ["Cash", "UPI", "Bank Transfer", "Card"]
 
 
 def money(x):
@@ -126,83 +128,120 @@ def rate_wise_breakup(lines):
 # ------------------------------------------------------- stock & valuation
 
 def rebuild_stock(conn):
-    """Replay every purchase and sale in date order to recompute weighted-average
-    cost, stock on hand and cost of goods sold. Called after any change so that
-    edits and deletions can never leave the valuation drifting."""
-    items = conn.query("SELECT id, opening_qty, opening_rate FROM items")
+    """Replay every purchase, production batch and sale in date order to
+    recompute weighted-average cost, stock on hand and cost of goods sold.
+    Called after any change so that edits and deletions can never leave the
+    valuation drifting.
+
+    Everything is read in a handful of queries and only rows whose figures
+    actually changed are written back, in batches - so the cost of a save no
+    longer grows with one database round trip per bill ever recorded."""
+    items = conn.query("SELECT id, opening_qty, opening_rate, stock_qty, stock_value FROM items")
     state = {}
     for it in items:
         q = float(it["opening_qty"] or 0)
         r = float(it["opening_rate"] or 0)
         state[it["id"]] = [q, money(q * r)]
 
-    events = []
-    for p in conn.query("SELECT id, bill_date FROM purchases"):
-        events.append((p["bill_date"], 0, p["id"], "P"))
+    def grouped(sql, key):
+        out = {}
+        for row in conn.query(sql):
+            out.setdefault(row[key], []).append(row)
+        return out
+
+    p_lines = grouped("SELECT purchase_id, item_id, qty, taxable FROM purchase_lines ORDER BY id", "purchase_id")
+    s_lines = grouped("SELECT id, sale_id, item_id, qty, cost_rate, cost FROM sale_lines ORDER BY id", "sale_id")
+    m_lines = grouped("SELECT id, production_id, raw_id, qty, cost_rate, cost FROM production_lines ORDER BY id",
+                      "production_id")
+    sales = {r["id"]: r for r in conn.query("SELECT id, invoice_date, cogs FROM sales")}
+    prods = {r["id"]: r for r in conn.query(
+        "SELECT id, prod_date, product_id, qty_out, other_cost, raw_cost, total_cost FROM productions")}
+
+    events = [(p["bill_date"], 0, p["id"], "P") for p in conn.query("SELECT id, bill_date FROM purchases")]
     # Same day: purchases land first, then production, then sales - so a batch
     # can use what was bought that morning and its output can be sold that day.
-    for m in conn.query("SELECT id, prod_date FROM productions"):
-        events.append((m["prod_date"], 1, m["id"], "M"))
-    for s in conn.query("SELECT id, invoice_date FROM sales"):
-        events.append((s["invoice_date"], 2, s["id"], "S"))
+    events += [(m["prod_date"], 1, m["id"], "M") for m in prods.values()]
+    events += [(s["invoice_date"], 2, s["id"], "S") for s in sales.values()]
     events.sort(key=lambda e: (e[0], e[1], e[2]))
 
+    upd_sl, upd_s, upd_ml, upd_m = [], [], [], []
     for _, _, doc_id, kind in events:
-        if kind == "M":
-            _replay_production(conn, state, doc_id)
-            continue
         if kind == "P":
-            for l in conn.query("SELECT item_id, qty, taxable FROM purchase_lines WHERE purchase_id = ?", (doc_id,)):
+            for l in p_lines.get(doc_id, ()):
                 st = state.setdefault(l["item_id"], [0.0, 0.0])
                 st[0] = qty(st[0] + float(l["qty"]))
                 st[1] = money(st[1] + float(l["taxable"]))
+        elif kind == "M":
+            doc = prods[doc_id]
+            raw_cost = 0.0
+            for l in m_lines.get(doc_id, ()):
+                st = state.setdefault(l["raw_id"], [0.0, 0.0])
+                rate, cost = _take(st, float(l["qty"]))
+                raw_cost += cost
+                if _changed(l["cost_rate"], rate) or _changed(l["cost"], cost):
+                    upd_ml.append((rate, cost, l["id"]))
+            raw_cost = money(raw_cost)
+            total = money(raw_cost + float(doc["other_cost"] or 0))
+            out = state.setdefault(doc["product_id"], [0.0, 0.0])
+            out[0] = qty(out[0] + float(doc["qty_out"]))
+            out[1] = money(out[1] + total)
+            if _changed(doc["raw_cost"], raw_cost) or _changed(doc["total_cost"], total):
+                upd_m.append((raw_cost, total, doc_id))
         else:
             cogs = 0.0
-            for l in conn.query("SELECT id, item_id, qty, taxable FROM sale_lines WHERE sale_id = ?", (doc_id,)):
+            for l in s_lines.get(doc_id, ()):
                 st = state.setdefault(l["item_id"], [0.0, 0.0])
-                # An emptied shelf carries no value; a negative quantity is kept
-                # as-is so the Stock page can flag it.
-                cost_rate, line_cost = _take(st, float(l["qty"]))
-                cogs += line_cost
-                conn.execute("UPDATE sale_lines SET cost_rate = ? WHERE id = ?", (cost_rate, l["id"]))
-            conn.execute("UPDATE sales SET cogs = ? WHERE id = ?", (money(cogs), doc_id))
+                rate, cost = _take(st, float(l["qty"]))
+                cogs += cost
+                if _changed(l["cost_rate"], rate) or _changed(l.get("cost"), cost):
+                    upd_sl.append((rate, cost, l["id"]))
+            cogs = money(cogs)
+            if _changed(sales[doc_id]["cogs"], cogs):
+                upd_s.append((cogs, doc_id))
 
-    for item_id, (q, v) in state.items():
-        conn.execute("UPDATE items SET stock_qty = ?, stock_value = ? WHERE id = ?", (qty(q), money(v), item_id))
+    conn.executemany("UPDATE sale_lines SET cost_rate = ?, cost = ? WHERE id = ?", upd_sl)
+    conn.executemany("UPDATE sales SET cogs = ? WHERE id = ?", upd_s)
+    conn.executemany("UPDATE production_lines SET cost_rate = ?, cost = ? WHERE id = ?", upd_ml)
+    conn.executemany("UPDATE productions SET raw_cost = ?, total_cost = ? WHERE id = ?", upd_m)
+    current = {it["id"]: it for it in items}
+    upd_i = []
+    for item_id, (q, v) in sorted(state.items()):
+        it = current.get(item_id)
+        if it is None:
+            continue
+        if _changed(it["stock_qty"], qty(q), 0.0005) or _changed(it["stock_value"], money(v)):
+            upd_i.append((qty(q), money(v), item_id))
+    conn.executemany("UPDATE items SET stock_qty = ?, stock_value = ? WHERE id = ?", upd_i)
+
+
+def _changed(old, new, tol=0.0049):
+    try:
+        return old is None or abs(float(old) - float(new)) > tol
+    except (TypeError, ValueError):
+        return True
 
 
 def _take(st, q):
     """Remove q units from a [qty, value] pair at its weighted-average cost and
-    return (cost_rate, cost). Shared by sales and production."""
+    return (cost_rate, cost). Shared by sales and production.
+
+    The line that empties a shelf takes whatever value is left on it - the
+    pennies weighted-average rounding leaves behind, or, when more is sold than
+    is on hand, the value of what really was there. So value only ever moves,
+    it is never created or lost, and the inventory in the accounts always
+    equals the stock valuation."""
     cost_rate = money(st[1] / st[0]) if st[0] > 0.0001 else 0.0
     line_cost = money(cost_rate * q)
-    st[0] = qty(st[0] - q)
-    st[1] = money(st[1] - line_cost)
-    if st[0] <= 0.0001:
-        if abs(st[0]) < 0.0001:
-            st[0] = 0.0
+    remaining = qty(st[0] - q)
+    if remaining <= 0.0001:
+        line_cost = money(st[1])
+        st[0] = 0.0 if abs(remaining) < 0.0001 else remaining
         st[1] = 0.0
+    else:
+        line_cost = min(line_cost, money(st[1]))
+        st[0] = remaining
+        st[1] = money(st[1] - line_cost)
     return cost_rate, line_cost
-
-
-def _replay_production(conn, state, prod_id):
-    """Consume each raw material at its current average cost, and add the
-    finished product to stock carrying the full cost of what went into it."""
-    doc = conn.query_one("SELECT product_id, qty_out, other_cost FROM productions WHERE id = ?", (prod_id,))
-    if not doc:
-        return
-    raw_cost = 0.0
-    for l in conn.query("SELECT id, raw_id, qty FROM production_lines WHERE production_id = ?", (prod_id,)):
-        st = state.setdefault(l["raw_id"], [0.0, 0.0])
-        rate, cost = _take(st, float(l["qty"]))
-        raw_cost += cost
-        conn.execute("UPDATE production_lines SET cost_rate = ?, cost = ? WHERE id = ?", (rate, cost, l["id"]))
-    raw_cost = money(raw_cost)
-    total = money(raw_cost + float(doc["other_cost"] or 0))
-    out = state.setdefault(doc["product_id"], [0.0, 0.0])
-    out[0] = qty(out[0] + float(doc["qty_out"]))
-    out[1] = money(out[1] + total)
-    conn.execute("UPDATE productions SET raw_cost = ?, total_cost = ? WHERE id = ?", (raw_cost, total, prod_id))
 
 
 # --------------------------------------------------- raw materials & recipes
@@ -242,24 +281,26 @@ def raw_material_rows(conn):
     raws = conn.query(
         "SELECT id, name, unit, low_stock_qty, opening_qty, stock_qty, stock_value "
         "FROM items WHERE kind = 'raw' AND active = 1 ORDER BY name")
-    out = []
-    for r in raws:
-        bought = conn.query_one(
-            "SELECT COALESCE(SUM(qty),0) AS q, COALESCE(SUM(taxable),0) AS v "
-            "FROM purchase_lines WHERE item_id = ?", (r["id"],))
-        per_product = conn.query(
-            "SELECT p.product_id, p.product_name, COALESCE(SUM(l.qty),0) AS q, "
+    bought_by = {r["item_id"]: r for r in conn.query(
+        "SELECT item_id, COALESCE(SUM(qty),0) AS q, COALESCE(SUM(taxable),0) AS v "
+        "FROM purchase_lines GROUP BY item_id")}
+    used_by = {}
+    for u in conn.query(
+            "SELECT l.raw_id, p.product_id, p.product_name, COALESCE(SUM(l.qty),0) AS q, "
             "COALESCE(SUM(l.cost),0) AS v, COUNT(DISTINCT p.id) AS batches "
             "FROM production_lines l JOIN productions p ON p.id = l.production_id "
-            "WHERE l.raw_id = ? GROUP BY p.product_id, p.product_name ORDER BY p.product_name",
-            (r["id"],))
+            "GROUP BY l.raw_id, p.product_id, p.product_name ORDER BY p.product_name"):
+        used_by.setdefault(u["raw_id"], []).append(u)
+    out = []
+    for r in raws:
+        bought = bought_by.get(r["id"]) or dict(q=0, v=0)
+        per_product = [dict(product_id=u["product_id"], product_name=u["product_name"],
+                            q=qty(u["q"]), v=money(u["v"]), batches=u["batches"])
+                       for u in used_by.get(r["id"], [])]
         used = sum(float(u["q"]) for u in per_product)
         opening = float(r["opening_qty"] or 0)
         received = opening + float(bought["q"])
         left = float(r["stock_qty"] or 0)
-        for u in per_product:
-            u["q"] = qty(u["q"])
-            u["v"] = money(u["v"])
         out.append(dict(
             id=r["id"], name=r["name"], unit=r["unit"],
             opening=qty(opening), bought=qty(bought["q"]), bought_value=money(bought["v"]),
@@ -298,7 +339,8 @@ def next_invoice_no(conn, invoice_date, prefix):
     """
     fy = fy_of(invoice_date)
     pattern = "{}/{}/".format(prefix, fy)
-    taken = {r["invoice_no"] for r in conn.query("SELECT invoice_no FROM sales")}
+    taken = {r["invoice_no"] for r in conn.query(
+        "SELECT invoice_no FROM sales WHERE invoice_no LIKE ?", (pattern + "%",))}
     highest = 0
     for no in taken:
         if no and no.startswith(pattern):

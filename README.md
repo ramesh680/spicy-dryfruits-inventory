@@ -94,6 +94,85 @@ what you actually used. The **Raw materials** page shows, for each ingredient,
 what was bought, how much went into each product, what is left, and how much of
 each product the remaining stock is enough for.
 
+## Accounting: journal, ledgers, P&L and balance sheet
+
+The app keeps a full set of **double-entry books**, and you never type an entry
+twice. Every sale, purchase, production batch, expense and receipt or payment
+is turned into balanced debit and credit postings the moment the books are
+read, so the journal, every ledger, the trial balance, the profit & loss and the
+balance sheet are always exactly in step with the registers. Add, edit or delete
+any document and every statement moves with it; there is no second copy of any
+figure that could drift.
+
+| Document | Posts as |
+| --- | --- |
+| Sale | Dr Cash / Bank / Debtors &middot; Cr Sales, Output GST, round off &middot; Dr Cost of goods sold, Cr Stock |
+| Purchase | Dr Stock (raw or finished), Input GST, round off &middot; Cr Cash / Bank / Creditors |
+| Production batch | Dr Finished goods &middot; Cr Raw materials, and Cash / Bank / Creditors for packing and labour |
+| Expense | Dr expense head, Input GST &middot; Cr Cash / Bank / Creditors |
+| Receipt / payment | Cash or Bank against Debtors, Creditors, Capital, Drawings, a loan, GST... |
+| Journal entry | whatever you write, as long as debits equal credits |
+
+Payment mode decides the account: Cash goes to *Cash in Hand*; UPI, bank
+transfer and card to *Bank Account*; *Credit (Udhaar)* to the customer's or
+supplier's running balance.
+
+**Screens** (sidebar, under *Accounts*)
+
+- **Expenses** &mdash; rent, packing, delivery, wages, marketing and so on, with
+  optional GST input credit. They flow into net profit and the GST position.
+- **Receipts & payments** &mdash; a customer clearing udhaar, paying a supplier,
+  capital put in, drawings, a loan, GST paid. Each prints as a numbered receipt
+  or payment voucher (`RCT/2026-27/0001`) with the amount in words.
+- **Outstanding** &mdash; who owes you and whom you owe, with days since the last
+  entry and one-click *Receive* / *Pay*.
+- **P&L & balance sheet** &mdash; profit & loss for any period (trading account,
+  gross profit, expenses, net profit), balance sheet as at any date (with
+  this year's and earlier years' profit shown separately), and a trial balance
+  with opening, movement and closing columns. All print cleanly to PDF.
+- **Journal & ledgers** &mdash; the day book of every entry, filterable by type,
+  and a ledger for any account (or one customer or supplier) with running
+  balance. Manual journal entries come with templates for the common ones:
+  capital, opening cash or bank, cash deposited or withdrawn, drawings, GST
+  set-off.
+- **Chart of accounts** &mdash; system accounts the app posts to (renamable, never
+  removable) plus starter heads you can rename, archive or add to.
+
+**Exports.** Every statement and register downloads as CSV, and *Full books
+pack (.zip)* on the P&L page bundles them all for a period: sales and purchase
+registers, expenses, receipts and payments, production, journal, trial
+balance, P&L, balance sheet, outstanding, GST summary, item-wise profit, stock,
+raw materials and the chart of accounts. That is the folder to hand an
+accountant at year end.
+
+**Getting started with the books.** Set a *Books start date* in Settings (the
+opening stock on the Items page is booked on it). Then record the money the
+business already had, or that you put in, with a journal entry: *Capital put in
+(to bank)* or *Opening cash in hand*. From there everything posts itself.
+
+**Checks built in.** The trial balance and balance sheet show whether they
+balance, and the balance sheet and chart of accounts reconcile the stock in the
+books against the stock valuation on the Stock page. They are produced by the
+same costing replay, so they always agree.
+
+## Performance
+
+- **Saving is constant-time.** Every save replays the stock ledger. That replay
+  used to make one or more database round trips per document ever recorded:
+  on a year of trading (2,400 documents) about 7,400 of them per save, which on a
+  hosted database like Neon is minutes. It now reads everything in six queries
+  and writes back only what changed, in batches: 7 round trips.
+- **Warm database connections.** Each gunicorn worker keeps a few connections
+  open instead of opening a new TLS connection (100-300 ms to Neon) for every
+  page, twice. A connection Neon dropped while its compute slept is replaced
+  on its first statement, with no liveness ping on every request.
+- Dashboard trend, production register and raw-material usage use grouped
+  queries instead of one per day or per row.
+- Static files are cached by the browser (they are versioned with `?v=`).
+
+Optional environment variable: `DB_POOL_MAX` (idle connections kept per
+worker, default 4).
+
 ## Running it locally
 
 ```bash
@@ -118,8 +197,11 @@ python tests/test_app.py
 ```
 
 They cover the GST splits, discounts, rounding, weighted-average costing,
-invoice numbering, the reports and every CSV export — against hand-calculated
-figures. The same suite runs on PostgreSQL by setting `DATABASE_URL` first.
+invoice numbering, the reports and every CSV export, and the accounting: a full
+cycle from capital through purchase, production, cash and credit sales,
+expenses, receipt and supplier payment, checked against a hand-worked P&L,
+ledger movements and outstanding balances; edits flowing through every
+statement; and refused unbalanced entries. All against hand-calculated figures. The same suite runs on PostgreSQL by setting `DATABASE_URL` first.
 
 ## Deploying to Render
 
@@ -172,9 +254,12 @@ e-invoicing and e-way bill rules. This is a bookkeeping tool, not a filing tool.
 ## How it is put together
 
 ```
-app.py              routes, CSV exports, search and date presets, template filters
+app.py              routes, CSV and zip exports, search and date presets, template filters
 core.py             GST maths, weighted-average costing, invoice numbering,
                     amount-in-words, state codes, admin PIN hashing
+books.py            double-entry engine: chart of accounts, postings generated
+                    from the documents, ledgers, trial balance, P&L, balance
+                    sheet, outstanding
 charts.py           chart geometry as percentages, axis ticks, compact formatting
 db.py               schema, migrations, and a thin layer that speaks both
                     SQLite and Postgres

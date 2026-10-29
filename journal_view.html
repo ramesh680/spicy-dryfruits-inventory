@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Journal entry {{ doc.j_no }}</h1><p class="sub">{{ doc.j_date|dmy }} &middot; {{ doc.narration }}</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('day_book') }}">Journal</a>
+    <button class="btn" type="button" onclick="window.print()">{{ icons.ic('print', 15) }} Print</button>
+    {% if is_admin %}<a class="btn" href="{{ url_for('journal_edit', jid=doc.id) }}">Edit</a>
+    {% else %}<a class="btn" href="{{ url_for('admin', next=request.full_path) }}">Unlock to edit</a>{% endif %}
+  </div>
+</div>
+<div class="voucher">
+  <div class="inv-title">Journal voucher</div>
+  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;border-bottom:2px solid #16181d;padding-bottom:.8rem;margin-bottom:1rem">
+    <div><h1>{{ s.business_name }}</h1></div>
+    <div class="small" style="text-align:right">No. <strong>{{ doc.j_no }}</strong><br>{{ doc.j_date|dmy }}</div>
+  </div>
+  <table>
+    <thead><tr><th>Account</th><th>Party</th><th>Memo</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+    <tbody>{% for l in lines %}<tr>
+      <td style="{{ 'padding-left:2rem' if l.credit else '' }}">{{ 'To ' if l.credit }}{{ l.name }}</td>
+      <td>{{ l.party_name }}</td><td>{{ l.memo }}</td>
+      <td class="num">{{ l.debit|inr if l.debit else '' }}</td><td class="num">{{ l.credit|inr if l.credit else '' }}</td>
+    </tr>{% endfor %}</tbody>
+    <tfoot><tr><td colspan="3">Total</td><td class="num">{{ total|inr }}</td><td class="num">{{ total|inr }}</td></tr></tfoot>
+  </table>
+  <p style="margin:1rem 0 0;font-size:.85rem"><em>Narration:</em> {{ doc.narration }}</p>
+  <div style="display:flex;justify-content:space-between;margin-top:2.6rem;font-size:.8rem;color:#5c6470">
+    <div>Prepared by</div><div>Checked by</div><div>Authorised signatory</div>
+  </div>
+</div>
+{% endblock %}

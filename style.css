@@ -362,4 +362,64 @@ hr{border:none;border-top:1px solid var(--border);margin:1.1rem 0}
   main{padding:0;max-width:none}
   .invoice{border:none;box-shadow:none;padding:0;max-width:none;border-radius:0}
 }
+/* ---------------------------------------------------------- accounts */
+.print-only{display:none}
+.stmt td.lvl1{padding-left:1.6rem}
+.stmt tr.grp td{font-weight:650;background:var(--surface-2)}
+.stmt tr.sub td{font-weight:650;border-top:1px solid var(--border-strong)}
+.stmt tr.big td{font-size:1.02rem;font-weight:700;border-top:2px solid var(--border-strong)}
+.stmt .pos{color:var(--green)} .stmt .neg{color:var(--red)}
+.je{border:1px solid var(--border);border-radius:var(--r-sm);margin-bottom:.7rem;overflow:hidden}
+.je-head{display:flex;gap:.7rem;align-items:baseline;flex-wrap:wrap;padding:.55rem .75rem;background:var(--surface-2);font-size:.86rem}
+.je-head .ref{font-weight:650}
+.je-head .amt{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:650}
+.je table{font-size:.84rem}
+.je td{padding:.38rem .75rem}
+.je td.cr-name{padding-left:2rem}
+.kind{font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;font-weight:700;padding:.1rem .45rem;border-radius:999px;background:var(--surface-3);color:var(--text-2)}
+.kind.sale{background:var(--green-soft);color:var(--green)}
+.kind.purchase{background:var(--blue-soft);color:var(--blue)}
+.kind.expense,.kind.payment{background:var(--red-soft);color:var(--red)}
+.kind.receipt{background:var(--green-soft);color:var(--green)}
+.kind.production{background:var(--amber-soft);color:var(--amber)}
+.kind.journal,.kind.opening{background:var(--accent-soft);color:var(--accent)}
+.okline{display:flex;align-items:center;gap:.5rem;font-size:.84rem;margin-top:.6rem}
+.jl-row td{vertical-align:middle}
+.jl-row input,.jl-row select{padding:.42rem .5rem;font-size:.85rem}
+.split{display:grid;gap:1.1rem;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start}
+.voucher{background:#fff;color:#16181d;max-width:760px;margin:0 auto;padding:2rem;border-radius:var(--r);border:1px solid var(--border)}
+.voucher h1{color:#16181d;font-size:1.25rem}
+.voucher table{font-size:.85rem}
+.voucher th{background:#fff;color:#5c6470;position:static;border-bottom:1px solid #b9bec7}
+.voucher td{border-bottom:1px solid #edeff2;color:#16181d}
+.voucher tbody tr:hover{background:transparent}
+.voucher tfoot td{background:#f5f6f8;color:#16181d;border-top:1.5px solid #b9bec7}
+.voucher .amount-box{border:2px solid #16181d;border-radius:10px;padding:.6rem 1rem;font-size:1.35rem;font-weight:750;display:inline-block}
+
+@media print{
+  .print-only{display:block}
+  .print-head{text-align:center;margin-bottom:1rem}
+  .print-head .ph-name{font-size:1.2rem;font-weight:750}
+  .print-head .ph-title{font-size:1rem;font-weight:700;margin-top:.6rem;text-transform:uppercase;letter-spacing:.12em}
+  .print-head .ph-sub{font-size:.8rem;color:#555}
+  .card,.stat{box-shadow:none;border:1px solid #ddd;break-inside:avoid}
+  .stmt tr{break-inside:avoid}
+  :root{--text:#111;--text-2:#333;--text-3:#555;--surface:#fff;--surface-2:#f3f3f3;--border:#ddd;--border-strong:#999;--bg:#fff}
+  .voucher{border:none;padding:0;max-width:none}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ---------------------------------------------------------- sign-in */
+.auth-wrap{min-height:100vh;display:grid;place-items:center;padding:1.5rem 1rem;
+  padding-top:max(1.5rem, env(safe-area-inset-top));padding-bottom:max(1.5rem, env(safe-area-inset-bottom))}
+.auth-card{width:100%;max-width:420px;margin:0}
+.auth-brand{padding:0 0 1.1rem}
+.auth-card h1{font-size:1.25rem;margin-bottom:.3rem}
+.auth-sub{color:var(--text-2);font-size:.86rem;margin:0 0 1.1rem}
+.link-card{border-color:var(--accent-solid)}
+.link-row{display:flex;gap:.5rem}
+.link-row input{flex:1;min-width:0;font-size:.8rem}
+.actions{white-space:nowrap}
+.actions form.inline{display:inline}
+.user-chip{display:flex;align-items:center;gap:.4rem;padding:.45rem .55rem;font-size:.78rem;color:var(--text-2);overflow:hidden}
+.user-chip a{color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}

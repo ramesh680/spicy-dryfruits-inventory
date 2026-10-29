@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_statements.html" as st %}
+{% macro tbl(side, rows, total, acc_id, receivable) %}
+<div class="tw"><table>
+  <thead><tr><th>{{ 'Customer' if receivable else 'Supplier' }}</th><th class="num">{{ 'Billed' if receivable else 'Bought' }}</th><th class="num">{{ 'Received' if receivable else 'Paid' }}</th><th class="num">Due</th><th class="num">Last entry</th><th class="no-print"></th></tr></thead>
+  <tbody>{% for r in rows %}<tr>
+    <td><a href="{{ url_for('ledger', account=acc_id, party=r.key, start='1900-01-01', end=as_at) }}">{{ r.name }}</a>{% if r.phone %}<div class="small muted">{{ r.phone }}</div>{% endif %}</td>
+    <td class="num">{{ r.billed|inr }}</td><td class="num">{{ r.settled|inr }}</td>
+    <td class="num" style="font-weight:660;color:{{ 'var(--red)' if r.amount > 0 else 'var(--green)' }}">{{ st.amt(r.amount) }}</td>
+    <td class="num small">{{ r.last|dmy }}<div class="{{ 'b-red badge' if r.days > 30 and r.amount > 0 else 'muted' }}">{{ r.days }} day{{ '' if r.days == 1 else 's' }}</div></td>
+    <td class="num no-print">{% if r.amount > 0 %}<a class="btn sm" href="{{ url_for('voucher_new', type='receipt' if receivable else 'payment', party_id=r.party_id, party_name=None if r.party_id else r.name, amount=r.amount) }}">{{ 'Receive' if receivable else 'Pay' }}</a>{% endif %}</td>
+  </tr>{% else %}<tr><td colspan="6" class="empty"><strong>{{ 'Nobody owes you anything' if receivable else 'You owe nobody anything' }}</strong>{{ 'Credit (udhaar) sales show up here until they are received.' if receivable else 'Purchases and expenses on credit show up here until paid.' }}</td></tr>{% endfor %}</tbody>
+  {% if rows %}<tfoot><tr><td colspan="3">Total</td><td class="num">{{ st.amt(total) }}</td><td colspan="2"></td></tr></tfoot>{% endif %}
+</table></div>
+{% endmacro %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Outstanding</h1><p class="sub">As at {{ as_at|dmy }} &middot; udhaar to collect and bills to pay</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='outstanding', start='1900-01-01', end=as_at) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <button class="btn" type="button" onclick="window.print()">{{ icons.ic('print', 15) }} Print</button>
+  </div>
+</div>
+{{ st.tabs(tabs, 'outstanding') }}
+{{ st.print_head(s, 'Outstanding balances', 'As at ' ~ as_at|dmy) }}
+
+<div class="grid g4 no-print" style="margin-bottom:1.1rem">
+  <div class="stat accent"><div class="label">To collect</div><div class="value">&#8377;{{ o.debtors.total|inr }}</div><div class="note">{{ o.debtors.rows|length }} customer{{ '' if o.debtors.rows|length == 1 else 's' }}</div></div>
+  <div class="stat bad"><div class="label">To pay</div><div class="value">&#8377;{{ o.creditors.total|inr }}</div><div class="note">{{ o.creditors.rows|length }} supplier{{ '' if o.creditors.rows|length == 1 else 's' }}</div></div>
+  <div class="stat"><div class="label">Net</div><div class="value">&#8377;{{ (o.debtors.total - o.creditors.total)|inr }}</div></div>
+  <div class="stat"><div class="label">Overdue 30+ days</div><div class="value">{{ o.debtors.rows|selectattr('days', 'gt', 30)|selectattr('amount', 'gt', 0)|list|length }}</div><div class="note">customers</div></div>
+</div>
+
+<div class="card"><h2>Receivable &mdash; customers owe you</h2><p class="sub">From sales on credit, less what they have paid.</p>
+  {{ tbl('debtors', o.debtors.rows, o.debtors.total, K.debtors, True) }}</div>
+<div class="card"><h2>Payable &mdash; you owe suppliers</h2><p class="sub">From purchases, batches and expenses on credit, less what you have paid.</p>
+  {{ tbl('creditors', o.creditors.rows, o.creditors.total, K.creditors, False) }}</div>
+<p class="note-line no-print">A walk-in credit sale is tracked by the name typed on the bill, so type it the same way each time &mdash; or save the customer under Contacts. A negative figure is an advance.</p>
+{% endblock %}

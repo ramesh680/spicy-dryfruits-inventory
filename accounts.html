@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_statements.html" as st %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Chart of accounts</h1><p class="sub">Every ledger the books post to, with its balance today. Add your own heads; the system ones can be renamed.</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='accounts', start=today, end=today) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <a class="btn" href="{{ url_for('journal_new') }}">{{ icons.ic('plus', 15) }} Journal entry</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2 id="form-title">Add an account</h2>
+  <form method="post" action="{{ url_for('accounts_save') }}" id="acc-form" data-groups='{{ group_options }}'>
+    <input type="hidden" name="id" id="a-id">
+    <div class="row r3">
+      <div class="field"><label for="a-name">Name</label><input id="a-name" name="name" required placeholder="e.g. Stall fees, HDFC current a/c"></div>
+      <div class="field"><label for="a-type">Kind</label>
+        <select id="a-type" name="type">{% for t, label in types %}<option value="{{ t }}" {{ 'selected' if t == 'expense' }}>{{ label }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="a-grp">Group</label><select id="a-grp" name="grp"></select></div>
+    </div>
+    <div class="row r3">
+      <div class="field"><label for="a-code">Code</label><input id="a-code" name="code" placeholder="optional, e.g. 5210"></div>
+      <div class="field" style="grid-column:span 2"><label for="a-notes">Notes</label><input id="a-notes" name="notes" placeholder="optional"></div>
+    </div>
+    <button class="btn primary" type="submit">Save account</button>
+    <button class="btn" type="button" id="a-cancel" style="display:none">Cancel</button>
+    <p class="small muted" id="sys-note" style="display:none;margin:.6rem 0 0">The app posts to this account on its own, so only its name, code and notes can change.</p>
+  </form>
+</div>
+
+{% for g in groups %}
+<div class="card">
+  <h2>{{ g.label }}</h2>
+  <div class="tw"><table>
+    <thead><tr><th style="width:80px">Code</th><th>Account</th><th>Group</th><th class="num">Balance</th><th></th></tr></thead>
+    <tbody>{% for r in g.rows %}<tr style="{{ 'opacity:.55' if not r.active }}">
+      <td class="small muted">{{ r.code }}</td>
+      <td><a href="{{ url_for('ledger', account=r.id) }}">{{ r.name }}</a>
+        {% if r.sys_key %}<span class="badge b-grey" title="Posted to automatically">auto</span>{% endif %}
+        {% if not r.active %}<span class="badge b-amber">archived</span>{% endif %}
+        {% if r.notes %}<div class="small muted">{{ r.notes }}</div>{% endif %}</td>
+      <td class="small muted">{{ r.grp }}</td>
+      <td class="num">{{ st.amt(r.balance) if r.balance else '&ndash;'|safe }}</td>
+      <td class="num">
+        <button class="btn sm edit" type="button" data-id="{{ r.id }}" data-name="{{ r.name }}" data-code="{{ r.code }}"
+          data-type="{{ r.type }}" data-grp="{{ r.grp }}" data-notes="{{ r.notes or '' }}" data-sys="{{ 1 if r.sys_key else 0 }}">Edit</button>
+        {% if not r.sys_key %}
+        <form method="post" action="{{ url_for('accounts_toggle', acc_id=r.id) }}" class="inline">
+          <button class="btn sm" type="submit">{{ 'Archive' if r.active else 'Restore' }}</button></form>
+        {% endif %}
+      </td>
+    </tr>{% endfor %}</tbody>
+    <tfoot><tr><td colspan="3">Total {{ g.label|lower }}</td><td class="num">{{ st.amt(g.total) }}</td><td></td></tr></tfoot>
+  </table></div>
+</div>
+{% endfor %}
+
+<div class="card">
+  <h2>Integrity check</h2>
+  <div class="okline">{% if check.ok %}<span class="badge b-green">OK</span> Stock in the books (&#8377;{{ check.books|inr }}) equals the stock valuation (&#8377;{{ check.stock|inr }}).
+  {% else %}<span class="badge b-red">Mismatch</span> Books &#8377;{{ check.books|inr }} vs stock &#8377;{{ check.stock|inr }} (difference &#8377;{{ check.diff|inr }}). Saving any purchase or sale re-runs the costing.{% endif %}</div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var f = document.getElementById('acc-form'), groups = JSON.parse(f.dataset.groups);
+  var type = document.getElementById('a-type'), grp = document.getElementById('a-grp');
+  function fill(sel) {
+    grp.innerHTML = (groups[type.value] || []).map(function (g) {
+      return '<option' + (g === sel ? ' selected' : '') + '>' + g + '</option>';
+    }).join('');
+  }
+  type.addEventListener('change', function () { fill(); });
+  fill('Indirect Expenses');
+  document.querySelectorAll('.edit').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var d = b.dataset, sys = d.sys === '1';
+      document.getElementById('a-id').value = d.id;
+      document.getElementById('a-name').value = d.name;
+      document.getElementById('a-code').value = d.code;
+      document.getElementById('a-notes').value = d.notes;
+      type.value = d.type; fill(d.grp);
+      type.disabled = sys; grp.disabled = sys;
+      document.getElementById('sys-note').style.display = sys ? '' : 'none';
+      document.getElementById('form-title').textContent = 'Edit ' + d.name;
+      document.getElementById('a-cancel').style.display = '';
+      window.scrollTo({top: 0, behavior: 'smooth'});
+    });
+  });
+  document.getElementById('a-cancel').addEventListener('click', function () {
+    f.reset(); document.getElementById('a-id').value = ''; type.disabled = false; grp.disabled = false;
+    fill('Indirect Expenses'); document.getElementById('sys-note').style.display = 'none';
+    document.getElementById('form-title').textContent = 'Add an account'; this.style.display = 'none';
+  });
+})();
+</script>
+{% endblock %}

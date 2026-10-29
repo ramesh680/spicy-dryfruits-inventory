@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_entry_table.html" as et %}
+{% block body %}
+<div class="page-head">
+  <div><h1>{{ doc.head }}</h1><p class="sub">{{ doc.exp_date|dmy }}{% if doc.party_name %} &middot; {{ doc.party_name }}{% endif %} &middot; {{ doc.payment_mode }}</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('expenses') }}">Back to register</a>
+    <button class="btn" type="button" onclick="window.print()">{{ icons.ic('print', 15) }} Print</button>
+    {% if is_admin %}<a class="btn" href="{{ url_for('expense_edit', eid=doc.id) }}">Edit</a>
+    {% else %}<a class="btn" href="{{ url_for('admin', next=request.full_path) }}">Unlock to edit</a>{% endif %}
+  </div>
+</div>
+
+<div class="voucher">
+  <div class="inv-title">Expense voucher</div>
+  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;border-bottom:2px solid #16181d;padding-bottom:.8rem;margin-bottom:1rem">
+    <div><h1>{{ s.business_name }}</h1><div class="small" style="color:#5c6470">{{ s.address|replace('\n', ', ') }}</div></div>
+    <div class="small" style="text-align:right">No. <strong>EXP-{{ doc.id }}</strong>{% if doc.ref_no %}<br>Bill ref {{ doc.ref_no }}{% endif %}<br>{{ doc.exp_date|dmy }}</div>
+  </div>
+  <table>
+    <tbody>
+      <tr><td>Head</td><td>{{ doc.head }}</td></tr>
+      {% if doc.description %}<tr><td>Description</td><td>{{ doc.description }}</td></tr>{% endif %}
+      <tr><td>Paid to</td><td>{{ doc.party_name or '&ndash;'|safe }}</td></tr>
+      <tr><td>Paid by</td><td>{{ doc.payment_mode }}</td></tr>
+      <tr><td>Amount</td><td class="num">{{ doc.amount|inr }}</td></tr>
+      {% if doc.cgst %}<tr><td>CGST {{ (doc.gst_rate/2)|round(1) }}%</td><td class="num">{{ doc.cgst|inr }}</td></tr>
+      <tr><td>SGST {{ (doc.gst_rate/2)|round(1) }}%</td><td class="num">{{ doc.sgst|inr }}</td></tr>{% endif %}
+      {% if doc.igst %}<tr><td>IGST {{ doc.gst_rate|round(0)|int }}%</td><td class="num">{{ doc.igst|inr }}</td></tr>{% endif %}
+    </tbody>
+    <tfoot><tr><td>Total</td><td class="num">&#8377;{{ doc.total|inr }}</td></tr></tfoot>
+  </table>
+  <div style="display:flex;justify-content:space-between;margin-top:2.6rem;font-size:.8rem;color:#5c6470">
+    <div>Prepared by</div><div>Approved by</div><div>Receiver&rsquo;s signature</div>
+  </div>
+</div>
+<div style="height:1.1rem"></div>
+{{ et.entry(entry) }}
+{% endblock %}

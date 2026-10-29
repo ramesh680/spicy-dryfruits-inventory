@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_statements.html" as st %}
+{% macro side(groups) %}
+  {% for g in groups %}
+  <tr class="grp"><td>{{ g.name }}</td><td></td><td class="num">{{ st.amt(g.total) }}</td></tr>
+  {% for r in g.rows %}<tr><td class="lvl1">{% if r.id %}<a href="{{ url_for('ledger', account=r.id, end=bs.as_at, preset=None, start='1900-01-01') }}">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}</td><td class="num">{{ st.amt(r.amount) }}</td><td></td></tr>{% endfor %}
+  {% endfor %}
+{% endmacro %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Balance sheet</h1><p class="sub">As at {{ bs.as_at|dmy }} &middot; what the business owns, owes, and is worth</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='balance-sheet', start=bs.fy_start, end=bs.as_at) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <button class="btn primary" type="button" onclick="window.print()">{{ icons.ic('print', 15) }} Print / PDF</button>
+  </div>
+</div>
+{{ st.tabs(tabs, 'balance_sheet') }}
+<form method="get" class="card no-print" style="padding:.8rem .9rem;display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap">
+  <div class="field" style="margin:0"><label for="as_at">As at</label><input type="date" id="as_at" name="as_at" value="{{ bs.as_at }}"></div>
+  <button class="btn" type="submit">Show</button>
+  <a class="btn" href="{{ url_for('balance_sheet') }}">Today</a>
+</form>
+{{ st.print_head(s, 'Balance sheet', 'As at ' ~ bs.as_at|dmy) }}
+
+<div class="grid g4 no-print" style="margin-bottom:1.1rem">
+  <div class="stat accent"><div class="label">Total assets</div><div class="value">&#8377;{{ bs.total_assets|inr }}</div></div>
+  <div class="stat"><div class="label">Liabilities</div><div class="value">&#8377;{{ bs.total_liab|inr }}</div></div>
+  <div class="stat"><div class="label">Owner&rsquo;s equity</div><div class="value">&#8377;{{ bs.total_equity|inr }}</div><div class="note">capital + profits kept</div></div>
+  <div class="stat {{ 'good' if bs.diff|abs < 0.01 else 'bad' }}"><div class="label">Balances</div><div class="value">{{ 'Yes' if bs.diff|abs < 0.01 else 'Off by ' ~ bs.diff|inr }}</div><div class="note">assets = liabilities + capital</div></div>
+</div>
+
+<div class="split">
+  <div class="card">
+    <h2>Capital &amp; liabilities</h2>
+    <div class="tw"><table class="stmt">
+      <thead><tr><th>Particulars</th><th class="num">&#8377;</th><th class="num">&#8377;</th></tr></thead>
+      <tbody>
+        {{ side(bs.equity) }}
+        <tr class="sub"><td>Owner&rsquo;s equity</td><td></td><td class="num">{{ st.amt(bs.total_equity) }}</td></tr>
+        {{ side(bs.liabilities) }}
+        {% if not bs.liabilities %}<tr><td class="lvl1 muted" colspan="3">No liabilities</td></tr>{% endif %}
+        <tr class="sub"><td>Liabilities</td><td></td><td class="num">{{ st.amt(bs.total_liab) }}</td></tr>
+        <tr class="big"><td>Total</td><td></td><td class="num">{{ st.amt(bs.total_le) }}</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <h2>Assets</h2>
+    <div class="tw"><table class="stmt">
+      <thead><tr><th>Particulars</th><th class="num">&#8377;</th><th class="num">&#8377;</th></tr></thead>
+      <tbody>
+        {{ side(bs.assets) }}
+        {% if not bs.assets %}<tr><td class="lvl1 muted" colspan="3">Nothing recorded yet</td></tr>{% endif %}
+        <tr class="big"><td>Total</td><td></td><td class="num">{{ st.amt(bs.total_assets) }}</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</div>
+
+<div class="card no-print">
+  <h2>Reading this</h2>
+  <p class="small muted" style="margin:0">Stock is at weighted-average cost. Input GST is credit you can claim; output GST is tax collected that is due to the government &mdash; the net of the two is what you pay when you file. A negative cash figure usually means a cash payment was recorded without the cash that funded it: add your opening cash or capital with a <a href="{{ url_for('journal_new') }}">journal entry</a>.</p>
+  {% if check %}<div class="okline">{% if check.ok %}<span class="badge b-green">Reconciled</span> Stock in the books (&#8377;{{ check.books|inr }}) matches the stock valuation on the Stock page.
+  {% else %}<span class="badge b-red">Check</span> Stock in the books &#8377;{{ check.books|inr }} vs Stock page &#8377;{{ check.stock|inr }}. Saving any entry re-runs the costing and brings them together.{% endif %}</div>{% endif %}
+</div>
+{% endblock %}

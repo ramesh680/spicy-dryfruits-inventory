@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block body %}
+{% set receipt = vtype == 'receipt' %}
+<div class="page-head">
+  <div><h1>{{ ('Edit ' ~ doc.v_no) if doc else ('Record money received' if receipt else 'Record money paid') }}</h1>
+    <p class="sub">{{ 'Money coming in that is not a new sale - a customer clearing udhaar, capital you put in, a loan taken.' if receipt
+                     else 'Money going out that is not a purchase or an expense - paying a supplier\u2019s bill, drawings, GST paid, a loan repaid.' }}</p></div>
+  <div class="actions">
+    {% if not doc %}<a class="btn" href="{{ url_for('voucher_new', type='payment' if receipt else 'receipt') }}">Switch to {{ 'payment' if receipt else 'receipt' }}</a>{% endif %}
+    <a class="btn" href="{{ url_for('vouchers') }}">Register</a>
+  </div>
+</div>
+
+<form method="post" id="vf" data-party-accounts='{{ party_accounts }}'>
+  <input type="hidden" name="v_type" value="{{ vtype }}">
+  <div class="card">
+    <div class="row r3">
+      <div class="field"><label for="v_date">Date</label>
+        <input type="date" id="v_date" name="v_date" value="{{ doc.v_date if doc else today }}" required></div>
+      <div class="field"><label for="account_id">{{ 'Received for' if receipt else 'Paid for' }}</label>
+        <select id="account_id" name="account_id" required>
+          {% set sel = doc.account_id if doc else default_acc %}
+          {% set ns = namespace(grp='') %}
+          {% for a in accounts %}
+            {% if a.grp != ns.grp %}{% if ns.grp %}</optgroup>{% endif %}<optgroup label="{{ a.grp }}">{% set ns.grp = a.grp %}{% endif %}
+            <option value="{{ a.id }}" {{ 'selected' if a.id == sel }}>{{ a.name }}</option>
+          {% endfor %}{% if ns.grp %}</optgroup>{% endif %}
+        </select>
+        <p class="small muted" style="margin:.3rem 0 0" id="acc-hint"></p></div>
+      <div class="field"><label for="payment_mode">{{ 'Received by' if receipt else 'Paid by' }}</label>
+        <select id="payment_mode" name="payment_mode">
+          {% for m in MONEY_MODES %}<option value="{{ m }}" {{ 'selected' if doc and doc.payment_mode == m }}>{{ m }}</option>{% endfor %}
+        </select>
+        <p class="small muted" style="margin:.3rem 0 0">Cash goes to Cash in hand; UPI, transfer and card to Bank.</p></div>
+    </div>
+    <div class="row r3" id="party-row">
+      <div class="field"><label for="party_id">{{ 'Customer' if receipt else 'Supplier' }}</label>
+        <select id="party_id" name="party_id">
+          <option value="">&mdash; not a saved contact &mdash;</option>
+          {% set psel = doc.party_id if doc else pre.party_id %}
+          {% for p in parties %}<option value="{{ p.id }}" {{ 'selected' if psel == p.id }}>{{ p.name }}</option>{% endfor %}
+        </select></div>
+      <div class="field"><label for="party_name">or the name on their bill</label>
+        <input id="party_name" name="party_name" value="{{ (doc.party_name if doc and not doc.party_id else '') or pre.party_name }}" placeholder="exactly as on the invoice"></div>
+      <div></div>
+    </div>
+    <div class="row r3">
+      <div class="field"><label for="amount">Amount (&#8377;)</label>
+        <input type="number" id="amount" name="amount" step="0.01" min="0.01" required value="{{ doc.amount if doc else (pre.amount or '') }}"></div>
+      <div class="field"><label for="ref_no">UTR / cheque / ref</label>
+        <input id="ref_no" name="ref_no" value="{{ doc.ref_no if doc else '' }}" placeholder="optional"></div>
+      <div class="field"><label for="notes">Note</label>
+        <input id="notes" name="notes" value="{{ doc.notes if doc else '' }}" placeholder="e.g. against SDF/2026-27/0012"></div>
+    </div>
+  </div>
+  <div class="btn-row">
+    <button class="btn primary" type="submit">{{ 'Save changes' if doc else ('Save receipt' if receipt else 'Save payment') }}</button>
+    <a class="btn" href="{{ url_for('vouchers') }}">Cancel</a>
+  </div>
+</form>
+{% if doc and is_admin %}
+<form method="post" action="{{ url_for('voucher_delete', vid=doc.id) }}" style="margin-top:1rem"
+      onsubmit="return confirm('Delete {{ doc.v_no }}? Balances will be updated. This cannot be undone.')">
+  <button class="btn danger" type="submit">Delete voucher</button>
+</form>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var f = document.getElementById('vf'), acc = document.getElementById('account_id');
+  var partyAccs = JSON.parse(f.dataset.partyAccounts || '[]').map(String);
+  var hints = {
+    '{{ K.debtors }}': 'Reduces what this customer owes you.',
+    '{{ K.creditors }}': 'Reduces what you owe this supplier.',
+    '{{ K.capital }}': 'Money you put into the business from your own pocket.',
+    '{{ K.drawings }}': 'Money you take out of the business for yourself.',
+    '{{ K.bank }}': 'Moves money into the bank account (e.g. cash deposited).',
+    '{{ K.cash }}': 'Moves money into cash in hand (e.g. cash withdrawn).',
+    '{{ K.out_cgst }}': 'GST paid to the government reduces what you owe on output tax.',
+    '{{ K.out_sgst }}': 'GST paid to the government reduces what you owe on output tax.',
+    '{{ K.out_igst }}': 'GST paid to the government reduces what you owe on output tax.'
+  };
+  function sync() {
+    var needs = partyAccs.indexOf(acc.value) >= 0;
+    document.getElementById('party-row').style.opacity = needs ? 1 : .6;
+    document.getElementById('acc-hint').textContent = hints[acc.value] || '';
+  }
+  acc.addEventListener('change', sync); sync();
+})();
+</script>
+{% endblock %}

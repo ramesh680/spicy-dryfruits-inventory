@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import os
+import zipfile
 from datetime import date, datetime, timedelta
 
 from functools import wraps
@@ -11,9 +12,10 @@ from flask import (Flask, Response, abort, flash, g, redirect, render_template,
                    request, session, url_for)
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+import books
 import charts
 import core
-from core import (GST_RATES, PAYMENT_MODES, STATE_CODES, STATE_NAME, UNITS,
+from core import (GST_RATES, MONEY_MODES, PAYMENT_MODES, STATE_CODES, STATE_NAME, UNITS,
                   amount_in_words, compute_line, money, qty, rate_wise_breakup,
                   today_str, totals_from_lines)
 from db import IS_PG, get_db, init_db
@@ -27,6 +29,8 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=bool(os.environ.get("RENDER")),
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+    # stylesheet and scripts are versioned with ?v=, so browsers may keep them
+    SEND_FILE_MAX_AGE_DEFAULT=timedelta(days=7),
 )
 
 MIN_PASSWORD = 8
@@ -124,9 +128,9 @@ def preset_range(name):
     return month_bounds(t)
 
 
-def resolve_range():
+def resolve_range(default="month"):
     """Date range for a register or report page: an explicit start/end wins,
-    otherwise the named preset, otherwise this month."""
+    otherwise the named preset, otherwise the default (this month)."""
     preset = (request.args.get("preset") or "").strip()
     start, end = request.args.get("start"), request.args.get("end")
     if start and end and not preset:
@@ -134,8 +138,8 @@ def resolve_range():
     if preset:
         s, e = preset_range(preset)
         return s, e, preset
-    s, e = month_bounds()
-    return s, e, "month"
+    s, e = preset_range(default)
+    return s, e, default
 
 
 def search_clause(term, id_col, table, lines_table, fk):
@@ -183,6 +187,7 @@ def parse_lines(conn, gst_enabled, interstate):
 def inject_globals():
     return dict(STATE_CODES=STATE_CODES, STATE_NAME=STATE_NAME,
                 GST_RATES=GST_RATES, UNITS=UNITS, PAYMENT_MODES=PAYMENT_MODES,
+                MONEY_MODES=MONEY_MODES,
                 today=today_str(), is_admin=is_admin(),
                 me=current_user() if request.endpoint not in ("static", "healthz") else None,
                 is_owner=is_owner() if request.endpoint not in ("static", "healthz") else False)
@@ -260,13 +265,21 @@ def dashboard():
         stock_value = money(sum(r["stock_value"] for r in stock))
         low = [r for r in stock if r["low"]]
 
-        # last 14 days trend
+        # last 14 days trend - two grouped queries rather than one per day
+        first = (date.today() - timedelta(days=13)).isoformat()
+        sv = {r["d"]: float(r["v"]) for r in conn.query(
+            "SELECT invoice_date AS d, COALESCE(SUM(taxable),0) AS v FROM sales "
+            "WHERE invoice_date >= ? AND invoice_date <= ? GROUP BY invoice_date", (first, t))}
+        pv = {r["d"]: float(r["v"]) for r in conn.query(
+            "SELECT bill_date AS d, COALESCE(SUM(taxable),0) AS v FROM purchases "
+            "WHERE bill_date >= ? AND bill_date <= ? GROUP BY bill_date", (first, t))}
         trend = []
         for i in range(13, -1, -1):
             d = (date.today() - timedelta(days=i)).isoformat()
-            sv = float(conn.scalar("SELECT COALESCE(SUM(taxable),0) AS v FROM sales WHERE invoice_date = ?", (d,)))
-            pv = float(conn.scalar("SELECT COALESCE(SUM(taxable),0) AS v FROM purchases WHERE bill_date = ?", (d,)))
-            trend.append(dict(day=d, sales=money(sv), purchases=money(pv)))
+            trend.append(dict(day=d, sales=money(sv.get(d, 0.0)), purchases=money(pv.get(d, 0.0))))
+
+        # the books: where the money is, and this month's net profit after expenses
+        acc = books.dashboard_figures(conn, m_start, m_end, t)
 
         recent_sales = conn.query(
             "SELECT * FROM sales ORDER BY invoice_date DESC, id DESC LIMIT 6")
@@ -290,7 +303,7 @@ def dashboard():
             stock_value=stock_value, low=low, trend=trend, trend_chart=trend_chart,
             recent_sales=recent_sales, recent_purchases=recent_purchases,
             out_tax=out_tax, in_tax=in_tax, net_gst=money(out_tax - in_tax),
-            month_label=date.today().strftime("%B %Y"))
+            month_label=date.today().strftime("%B %Y"), acc=acc)
 
 
 # ----------------------------------------------------------------- items
@@ -766,9 +779,11 @@ def save_production(conn, prod_id=None):
             short.append("{} (have {} {})".format(it["name"], core.qty(have), it["unit"]))
 
     now = datetime.now().isoformat(timespec="seconds")
+    mode = f("other_cost_mode", "Cash")
     header = dict(prod_date=f("prod_date", today_str()), product_id=product["id"],
                   product_name=product["name"], qty_out=core.qty(out_qty),
-                  other_cost=money(fnum("other_cost")), notes=f("notes"))
+                  other_cost=money(fnum("other_cost")), notes=f("notes"),
+                  other_cost_mode=mode if mode in PAYMENT_MODES else "Cash")
     if prod_id:
         sets = ", ".join(k + " = ?" for k in header)
         conn.execute("UPDATE productions SET " + sets + ", updated_at = ?, edit_count = edit_count + 1 WHERE id = ?",
@@ -821,9 +836,14 @@ def production():
         rows = conn.query(
             "SELECT * FROM productions WHERE prod_date >= ? AND prod_date <= ? "
             "ORDER BY prod_date DESC, id DESC", (start, end))
+        lines = {}
+        for l in conn.query(
+                "SELECT l.production_id, l.raw_name, l.qty FROM production_lines l "
+                "JOIN productions p ON p.id = l.production_id "
+                "WHERE p.prod_date >= ? AND p.prod_date <= ? ORDER BY l.id", (start, end)):
+            lines.setdefault(l["production_id"], []).append(l)
         for r in rows:
-            r["lines"] = conn.query(
-                "SELECT raw_name, qty FROM production_lines WHERE production_id = ? ORDER BY id", (r["id"],))
+            r["lines"] = lines.get(r["id"], [])
             q = float(r["qty_out"])
             r["unit_cost"] = money(float(r["total_cost"]) / q) if q > 0 else 0.0
         units = {i["id"]: i["unit"] for i in conn.query("SELECT id, unit FROM items")}
@@ -948,13 +968,19 @@ def _report(conn, start, end):
     cogs = money(sum(float(r["cogs"]) for r in sales_rows))
     out_tax = money(sale_tot["cgst"] + sale_tot["sgst"] + sale_tot["igst"])
     in_tax = money(purch_tot["cgst"] + purch_tot["sgst"] + purch_tot["igst"])
+    exp_tax = money(conn.scalar(
+        "SELECT COALESCE(SUM(cgst + sgst + igst),0) AS v FROM expenses WHERE exp_date >= ? AND exp_date <= ?",
+        (start, end)))
+    expenses_total = money(conn.scalar(
+        "SELECT COALESCE(SUM(amount),0) AS v FROM expenses WHERE exp_date >= ? AND exp_date <= ?",
+        (start, end)))
 
     by_item = {}
     for l in sale_lines:
         b = by_item.setdefault(l["item_name"], dict(name=l["item_name"], qty=0.0, revenue=0.0, cost=0.0))
         b["qty"] += float(l["qty"])
         b["revenue"] += float(l["taxable"])
-        b["cost"] += float(l["qty"]) * float(l["cost_rate"])
+        b["cost"] += float(l.get("cost") or 0)
     items_sold = []
     for b in by_item.values():
         b["qty"] = qty(b["qty"])
@@ -1007,7 +1033,9 @@ def _report(conn, start, end):
         sale_tot=sale_tot, purch_tot=purch_tot, cogs=cogs,
         gross_profit=money(sale_tot["taxable"] - cogs),
         margin=money((sale_tot["taxable"] - cogs) / sale_tot["taxable"] * 100) if sale_tot["taxable"] else 0.0,
-        out_tax=out_tax, in_tax=in_tax, net_gst=money(out_tax - in_tax),
+        out_tax=out_tax, in_tax=in_tax, exp_tax=exp_tax, net_gst=money(out_tax - in_tax - exp_tax),
+        expenses_total=expenses_total,
+        net_profit=money(sale_tot["taxable"] - cogs - expenses_total),
         sale_breakup=rate_wise_breakup(sale_lines),
         purch_breakup=rate_wise_breakup(purch_lines),
         items_sold=items_sold, days=days)
@@ -1021,6 +1049,570 @@ def reports():
                                r=_report(conn, start, end), preset=preset, presets=PRESETS)
 
 
+# ------------------------------------------------------------- accounting
+# Everything below reads from books.build(), which turns the documents into
+# double entries when asked. There is no second copy of any figure, so a new,
+# edited or deleted sale, purchase, batch, expense or voucher shows up in every
+# ledger and statement the moment it is saved.
+
+def _valid_date(v):
+    try:
+        return datetime.strptime(v, "%Y-%m-%d").date().isoformat()
+    except (TypeError, ValueError):
+        return ""
+
+
+def _party_from_form(conn, prefix=""):
+    """(party_id, party_name, state_code) from a saved contact or a typed name."""
+    pid = f(prefix + "party_id")
+    if pid:
+        try:
+            p = conn.query_one("SELECT * FROM parties WHERE id = ?", (int(pid),))
+        except ValueError:
+            p = None
+        if p:
+            return p["id"], p["name"], p["state_code"]
+    return None, f(prefix + "party_name"), ""
+
+
+def _accounts_by_type(conn, *types, keep=()):
+    return [a for a in books.all_accounts(conn)
+            if a["type"] in types and (a["active"] or a["id"] in keep)]
+
+
+def _account(conn, acc_id):
+    try:
+        return conn.query_one("SELECT * FROM accounts WHERE id = ?", (int(acc_id),))
+    except (TypeError, ValueError):
+        return None
+
+
+STATEMENT_TABS = [("profit_loss", "Profit & loss"), ("balance_sheet", "Balance sheet"),
+                  ("trial_balance", "Trial balance"), ("outstanding", "Outstanding"),
+                  ("day_book", "Journal"), ("ledger", "Ledgers")]
+
+
+# ---- expenses
+
+@app.route("/expenses")
+def expenses():
+    start, end, preset = resolve_range()
+    q = (request.args.get("q") or "").strip()
+    with get_db() as conn:
+        sql = ("SELECT e.*, a.name AS head FROM expenses e LEFT JOIN accounts a ON a.id = e.account_id "
+               "WHERE e.exp_date >= ? AND e.exp_date <= ?")
+        params = [start, end]
+        if q:
+            like = "%" + q.lower() + "%"
+            sql += (" AND (LOWER(e.description) LIKE ? OR LOWER(e.party_name) LIKE ? "
+                    "OR LOWER(e.ref_no) LIKE ? OR LOWER(a.name) LIKE ?)")
+            params += [like, like, like, like]
+        rows = conn.query(sql + " ORDER BY e.exp_date DESC, e.id DESC", params)
+        by_head = {}
+        for r in rows:
+            h = by_head.setdefault(r["head"] or "?", dict(name=r["head"] or "?", amount=0.0, n=0))
+            h["amount"] = money(h["amount"] + float(r["amount"]))
+            h["n"] += 1
+        heads = sorted(by_head.values(), key=lambda h: -h["amount"])
+        return render_template("expenses.html", s=get_settings(conn), rows=rows, heads=heads,
+                               start=start, end=end, preset=preset, q=q, presets=PRESETS,
+                               total=money(sum(float(r["total"]) for r in rows)),
+                               amount=money(sum(float(r["amount"]) for r in rows)),
+                               gst=money(sum(float(r["cgst"]) + float(r["sgst"]) + float(r["igst"]) for r in rows)))
+
+
+def save_expense(conn, s, eid=None):
+    back = url_for("expense_edit", eid=eid) if eid else url_for("expense_new")
+    acc = _account(conn, f("account_id"))
+    amount = money(fnum("amount"))
+    if not acc or acc["type"] not in ("expense", "asset"):
+        flash("Choose what the money was spent on.", "error")
+        return redirect(back)
+    if amount <= 0:
+        flash("Enter the amount spent.", "error")
+        return redirect(back)
+    party_id, party_name, state = _party_from_form(conn)
+    interstate = bool(state and state != s["state_code"]) or (not state and bool(f("interstate")))
+    rate = fnum("gst_rate", 0)
+    line = compute_line(1, amount, 0, rate if rate in GST_RATES else 0, interstate, bool(s["gst_enabled"]))
+    mode = f("payment_mode", "Cash")
+    if mode not in PAYMENT_MODES:
+        mode = "Cash"
+    if mode == books.CREDIT_MODE and not (party_id or party_name):
+        flash("An expense on credit needs the supplier's name, so you can see what you owe them.", "error")
+        return redirect(back)
+    now = datetime.now().isoformat(timespec="seconds")
+    data = dict(exp_date=_valid_date(f("exp_date")) or today_str(), account_id=acc["id"],
+                party_id=party_id, party_name=party_name, ref_no=f("ref_no"),
+                description=f("description"), amount=line["taxable"], gst_rate=line["gst_rate"],
+                interstate=1 if interstate else 0, cgst=line["cgst"], sgst=line["sgst"],
+                igst=line["igst"], total=line["total"], payment_mode=mode)
+    if eid:
+        sets = ", ".join(k + " = ?" for k in data)
+        conn.execute("UPDATE expenses SET " + sets + ", updated_at = ?, edit_count = edit_count + 1 WHERE id = ?",
+                     list(data.values()) + [now, eid])
+    else:
+        data["created_at"] = now
+        eid = conn.insert("expenses", data)
+    flash("Expense {} - \u20b9{} on {}. The books are updated.".format(
+        "updated" if request.endpoint == "expense_edit" else "recorded", inr(data["total"]), acc["name"]), "ok")
+    if f("again"):
+        return redirect(url_for("expense_new"))
+    return redirect(url_for("expense_view", eid=eid))
+
+
+def expense_form(conn, s, doc=None):
+    heads = _accounts_by_type(conn, "expense", "asset", keep=(doc["account_id"],) if doc else ())
+    heads = [a for a in heads if a["type"] == "expense" or a["grp"] in ("Fixed Assets", "Loans & Advances")]
+    parties = conn.query("SELECT * FROM parties ORDER BY name")
+    return render_template("expense_form.html", s=s, doc=doc, heads=heads, parties=parties,
+                           party_states_json=party_states_json(parties))
+
+
+@app.route("/expenses/new", methods=["GET", "POST"])
+def expense_new():
+    with get_db() as conn:
+        s = get_settings(conn)
+        if request.method == "POST":
+            return save_expense(conn, s)
+        return expense_form(conn, s)
+
+
+@app.route("/expenses/<int:eid>")
+def expense_view(eid):
+    with get_db() as conn:
+        doc = conn.query_one("SELECT e.*, a.name AS head FROM expenses e LEFT JOIN accounts a "
+                             "ON a.id = e.account_id WHERE e.id = ?", (eid,))
+        if not doc:
+            return redirect(url_for("expenses"))
+        return render_template("expense_view.html", s=get_settings(conn), doc=doc,
+                               entry=_entry_for(conn, "expense", eid, doc["exp_date"]))
+
+
+@app.route("/expenses/<int:eid>/edit", methods=["GET", "POST"])
+@admin_required
+def expense_edit(eid):
+    with get_db() as conn:
+        s = get_settings(conn)
+        doc = conn.query_one("SELECT * FROM expenses WHERE id = ?", (eid,))
+        if not doc:
+            return redirect(url_for("expenses"))
+        if request.method == "POST":
+            return save_expense(conn, s, eid=eid)
+        return expense_form(conn, s, doc=doc)
+
+
+@app.route("/expenses/<int:eid>/delete", methods=["POST"])
+@admin_required
+def expense_delete(eid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM expenses WHERE id = ?", (eid,))
+        flash("Expense deleted - the books are updated.", "ok")
+    return redirect(url_for("expenses"))
+
+
+def _entry_for(conn, kind, doc_id, day):
+    """The double entry a document produced, with account names, for its page."""
+    names = {a["id"]: a for a in books.all_accounts(conn)}
+    for e in books.build(conn, start=day, end=day):
+        if e["kind"] == kind and e["doc_id"] == doc_id:
+            for l in e["lines"]:
+                a = names.get(l["acc"], {})
+                l["name"] = a.get("name", "?")
+                l["code"] = a.get("code", "")
+            return e
+    return None
+
+
+# ---- receipts and payments
+
+@app.route("/vouchers")
+def vouchers():
+    start, end, preset = resolve_range()
+    q = (request.args.get("q") or "").strip()
+    vtype = request.args.get("type") or ""
+    with get_db() as conn:
+        sql = ("SELECT v.*, a.name AS account_name FROM vouchers v LEFT JOIN accounts a ON a.id = v.account_id "
+               "WHERE v.v_date >= ? AND v.v_date <= ?")
+        params = [start, end]
+        if vtype in ("receipt", "payment"):
+            sql += " AND v.v_type = ?"
+            params.append(vtype)
+        if q:
+            like = "%" + q.lower() + "%"
+            sql += (" AND (LOWER(v.party_name) LIKE ? OR LOWER(v.v_no) LIKE ? OR LOWER(v.notes) LIKE ? "
+                    "OR LOWER(v.ref_no) LIKE ? OR LOWER(a.name) LIKE ?)")
+            params += [like] * 5
+        rows = conn.query(sql + " ORDER BY v.v_date DESC, v.id DESC", params)
+        return render_template("vouchers.html", s=get_settings(conn), rows=rows, vtype=vtype,
+                               start=start, end=end, preset=preset, q=q, presets=PRESETS,
+                               received=money(sum(float(r["amount"]) for r in rows if r["v_type"] == "receipt")),
+                               paid=money(sum(float(r["amount"]) for r in rows if r["v_type"] == "payment")))
+
+
+def save_voucher(conn, vid=None):
+    vtype = "payment" if f("v_type") == "payment" else "receipt"
+    back = url_for("voucher_edit", vid=vid) if vid else url_for("voucher_new", type=vtype)
+    acc = _account(conn, f("account_id"))
+    amount = money(fnum("amount"))
+    if not acc:
+        flash("Choose the account this money is for.", "error")
+        return redirect(back)
+    if acc["sys_key"] in ("cash", "bank") and books.mode_key(f("payment_mode"), "cash") == acc["sys_key"]:
+        flash("The money cannot come from and go to the same account.", "error")
+        return redirect(back)
+    if amount <= 0:
+        flash("Enter the amount.", "error")
+        return redirect(back)
+    party_id, party_name, _state = _party_from_form(conn)
+    if acc["sys_key"] in books.PARTY_KEYS and not (party_id or party_name):
+        flash("Say which " + ("customer" if acc["sys_key"] == "debtors" else "supplier")
+              + " this is, so their balance is right.", "error")
+        return redirect(back)
+    mode = f("payment_mode", "Cash")
+    if mode not in MONEY_MODES:
+        mode = "Cash"
+    day = _valid_date(f("v_date")) or today_str()
+    now = datetime.now().isoformat(timespec="seconds")
+    data = dict(v_type=vtype, v_date=day, account_id=acc["id"], party_id=party_id,
+                party_name=party_name, amount=amount, payment_mode=mode,
+                ref_no=f("ref_no"), notes=f("notes"))
+    if vid:
+        sets = ", ".join(k + " = ?" for k in data)
+        conn.execute("UPDATE vouchers SET " + sets + ", updated_at = ?, edit_count = edit_count + 1 WHERE id = ?",
+                     list(data.values()) + [now, vid])
+    else:
+        data["v_no"] = books.next_number(conn, "vouchers", "v_no", "RCT" if vtype == "receipt" else "PMT", day)
+        data["created_at"] = now
+        vid = conn.insert("vouchers", data)
+    flash(("Receipt" if vtype == "receipt" else "Payment") + " saved - balances updated.", "ok")
+    return redirect(url_for("voucher_view", vid=vid))
+
+
+def voucher_form(conn, vtype, doc=None):
+    accounts = [a for a in books.all_accounts(conn) if a["active"] or (doc and a["id"] == doc["account_id"])]
+    K = books.key_ids(conn)
+    parties = conn.query("SELECT * FROM parties ORDER BY name")
+    pre = dict(party_id=request.args.get("party_id", type=int),
+               party_name=request.args.get("party_name") or "",
+               amount=request.args.get("amount", type=float))
+    return render_template("voucher_form.html", s=get_settings(conn), doc=doc, vtype=vtype,
+                           accounts=accounts, parties=parties, K=K, pre=pre,
+                           default_acc=K["debtors"] if vtype == "receipt" else K["creditors"],
+                           party_accounts=json.dumps([K[k] for k in books.PARTY_KEYS]))
+
+
+@app.route("/vouchers/new", methods=["GET", "POST"])
+def voucher_new():
+    with get_db() as conn:
+        if request.method == "POST":
+            return save_voucher(conn)
+        vtype = "payment" if request.args.get("type") == "payment" else "receipt"
+        return voucher_form(conn, vtype)
+
+
+@app.route("/vouchers/<int:vid>")
+def voucher_view(vid):
+    with get_db() as conn:
+        doc = conn.query_one("SELECT v.*, a.name AS account_name FROM vouchers v LEFT JOIN accounts a "
+                             "ON a.id = v.account_id WHERE v.id = ?", (vid,))
+        if not doc:
+            return redirect(url_for("vouchers"))
+        party = conn.query_one("SELECT * FROM parties WHERE id = ?", (doc["party_id"],)) if doc["party_id"] else None
+        return render_template("voucher_view.html", s=get_settings(conn), doc=doc, party=party,
+                               words=amount_in_words(doc["amount"]),
+                               entry=_entry_for(conn, doc["v_type"], vid, doc["v_date"]))
+
+
+@app.route("/vouchers/<int:vid>/edit", methods=["GET", "POST"])
+@admin_required
+def voucher_edit(vid):
+    with get_db() as conn:
+        doc = conn.query_one("SELECT * FROM vouchers WHERE id = ?", (vid,))
+        if not doc:
+            return redirect(url_for("vouchers"))
+        if request.method == "POST":
+            return save_voucher(conn, vid=vid)
+        return voucher_form(conn, doc["v_type"], doc=doc)
+
+
+@app.route("/vouchers/<int:vid>/delete", methods=["POST"])
+@admin_required
+def voucher_delete(vid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM vouchers WHERE id = ?", (vid,))
+        flash("Voucher deleted - balances updated.", "ok")
+    return redirect(url_for("vouchers"))
+
+
+# ---- journal
+
+@app.route("/journal")
+def day_book():
+    start, end, preset = resolve_range()
+    q = (request.args.get("q") or "").strip().lower()
+    kind = request.args.get("kind") or ""
+    with get_db() as conn:
+        names = {a["id"]: a for a in books.all_accounts(conn)}
+        entries = books.build(conn, start=start, end=end)
+        if kind:
+            entries = [e for e in entries if e["kind"] == kind]
+        if q:
+            entries = [e for e in entries if q in (e["ref"] or "").lower() or q in (e["narration"] or "").lower()
+                       or any(q in names.get(l["acc"], {}).get("name", "").lower() for l in e["lines"])]
+        dr = money(sum(l["dr"] for e in entries for l in e["lines"]))
+        cr = money(sum(l["cr"] for e in entries for l in e["lines"]))
+        shown = list(reversed(entries))[:400]
+        for e in shown:
+            for l in e["lines"]:
+                a = names.get(l["acc"], {})
+                l["name"], l["code"] = a.get("name", "?"), a.get("code", "")
+        return render_template("journal.html", s=get_settings(conn), entries=shown, count=len(entries),
+                               start=start, end=end, preset=preset, q=request.args.get("q") or "",
+                               presets=PRESETS, kind=kind, dr=dr, cr=cr, tabs=STATEMENT_TABS)
+
+
+def parse_journal_lines(conn):
+    accounts = {a["id"]: a for a in books.all_accounts(conn)}
+    parties = {p["id"]: p for p in conn.query("SELECT id, name FROM parties")}
+    lines = []
+    fields = zip(request.form.getlist("acc_id"), request.form.getlist("debit"),
+                 request.form.getlist("credit"), request.form.getlist("line_party"),
+                 request.form.getlist("memo"))
+    for acc_id, d, c, party, memo in fields:
+        try:
+            acc_id = int(acc_id)
+        except ValueError:
+            continue
+        try:
+            d, c = money(float(d or 0)), money(float(c or 0))
+        except ValueError:
+            continue
+        if acc_id not in accounts or (d <= 0 and c <= 0):
+            continue
+        net = money(d - c)
+        pid = None
+        try:
+            pid = int(party) if party else None
+        except ValueError:
+            pid = None
+        lines.append(dict(account_id=acc_id, debit=net if net > 0 else 0.0, credit=-net if net < 0 else 0.0,
+                          party_id=pid if pid in parties else None,
+                          party_name=parties[pid]["name"] if pid in parties else "",
+                          memo=(memo or "").strip()))
+    return [l for l in lines if l["debit"] or l["credit"]]
+
+
+def save_journal(conn, jid=None):
+    back = url_for("journal_edit", jid=jid) if jid else url_for("journal_new")
+    lines = parse_journal_lines(conn)
+    dr = money(sum(l["debit"] for l in lines))
+    cr = money(sum(l["credit"] for l in lines))
+    if len(lines) < 2:
+        flash("A journal entry needs at least one debit and one credit line.", "error")
+        return redirect(back)
+    if abs(dr - cr) >= 0.005:
+        flash("Debits (\u20b9{}) and credits (\u20b9{}) must be equal. Nothing was saved.".format(inr(dr), inr(cr)),
+              "error")
+        return redirect(back)
+    day = _valid_date(f("j_date")) or today_str()
+    now = datetime.now().isoformat(timespec="seconds")
+    if jid:
+        conn.execute("UPDATE journals SET j_date = ?, narration = ?, updated_at = ?, "
+                     "edit_count = edit_count + 1 WHERE id = ?", (day, f("narration"), now, jid))
+        conn.execute("DELETE FROM journal_lines WHERE journal_id = ?", (jid,))
+    else:
+        jid = conn.insert("journals", dict(j_no=books.next_number(conn, "journals", "j_no", "JV", day),
+                                           j_date=day, narration=f("narration"), created_at=now))
+    for l in lines:
+        l["journal_id"] = jid
+        conn.insert("journal_lines", l)
+    flash("Journal entry saved - \u20b9{} posted.".format(inr(dr)), "ok")
+    return redirect(url_for("journal_view", jid=jid))
+
+
+def journal_form(conn, doc=None, lines=None):
+    accounts = [a for a in books.all_accounts(conn)
+                if a["active"] or (lines and a["id"] in {l["account_id"] for l in lines})]
+    K = books.key_ids(conn)
+    return render_template(
+        "journal_form.html", s=get_settings(conn), doc=doc, accounts=accounts,
+        parties=conn.query("SELECT id, name FROM parties ORDER BY name"), K=K,
+        party_accounts=json.dumps([K[k] for k in books.PARTY_KEYS]),
+        existing_json=json.dumps([dict(acc_id=l["account_id"], debit=float(l["debit"]), credit=float(l["credit"]),
+                                       party_id=l["party_id"] or "", memo=l["memo"] or "")
+                                  for l in (lines or [])]))
+
+
+@app.route("/journal/new", methods=["GET", "POST"])
+def journal_new():
+    with get_db() as conn:
+        if request.method == "POST":
+            return save_journal(conn)
+        return journal_form(conn)
+
+
+@app.route("/journal/<int:jid>")
+def journal_view(jid):
+    with get_db() as conn:
+        doc = conn.query_one("SELECT * FROM journals WHERE id = ?", (jid,))
+        if not doc:
+            return redirect(url_for("day_book"))
+        lines = conn.query("SELECT l.*, a.name, a.code FROM journal_lines l LEFT JOIN accounts a "
+                           "ON a.id = l.account_id WHERE l.journal_id = ? ORDER BY l.id", (jid,))
+        return render_template("journal_view.html", s=get_settings(conn), doc=doc, lines=lines,
+                               total=money(sum(float(l["debit"]) for l in lines)))
+
+
+@app.route("/journal/<int:jid>/edit", methods=["GET", "POST"])
+@admin_required
+def journal_edit(jid):
+    with get_db() as conn:
+        doc = conn.query_one("SELECT * FROM journals WHERE id = ?", (jid,))
+        if not doc:
+            return redirect(url_for("day_book"))
+        if request.method == "POST":
+            return save_journal(conn, jid=jid)
+        lines = conn.query("SELECT * FROM journal_lines WHERE journal_id = ? ORDER BY id", (jid,))
+        return journal_form(conn, doc=doc, lines=lines)
+
+
+@app.route("/journal/<int:jid>/delete", methods=["POST"])
+@admin_required
+def journal_delete(jid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM journal_lines WHERE journal_id = ?", (jid,))
+        conn.execute("DELETE FROM journals WHERE id = ?", (jid,))
+        flash("Journal entry deleted.", "ok")
+    return redirect(url_for("day_book"))
+
+
+# ---- chart of accounts and ledgers
+
+@app.route("/accounts")
+def accounts():
+    with get_db() as conn:
+        rows = books.all_accounts(conn)
+        bal = books.balances(books.build(conn, end=today_str()), rows)
+        for r in rows:
+            r["balance"] = bal.get(r["id"], 0.0)
+        groups = []
+        for typ, label in books.TYPES:
+            mine = [r for r in rows if r["type"] == typ]
+            groups.append(dict(type=typ, label=label, rows=mine,
+                               total=money(sum(r["balance"] for r in mine))))
+        return render_template("accounts.html", s=get_settings(conn), groups=groups,
+                               group_options=json.dumps(books.GROUPS), types=books.TYPES,
+                               check=books.inventory_check(conn))
+
+
+@app.route("/accounts/save", methods=["POST"])
+def accounts_save():
+    with get_db() as conn:
+        name = f("name")
+        typ = f("type")
+        grp = f("grp")
+        if not name:
+            flash("Give the account a name.", "error")
+            return redirect(url_for("accounts"))
+        acc_id = f("id")
+        if acc_id and not is_admin():
+            flash("Unlock admin to change an existing account.", "warn")
+            return redirect(url_for("admin", next=url_for("accounts")))
+        if acc_id:
+            acc = _account(conn, acc_id)
+            if not acc:
+                return redirect(url_for("accounts"))
+            if acc["sys_key"]:
+                # the app posts to these by role: the name and code may change, the nature may not
+                typ, grp = acc["type"], acc["grp"]
+            if typ not in books.TYPE_NAME:
+                typ = acc["type"]
+            if grp not in books.GROUPS[typ]:
+                grp = books.GROUPS[typ][-1]
+            conn.execute("UPDATE accounts SET name = ?, code = ?, type = ?, grp = ?, notes = ? WHERE id = ?",
+                         (name, f("code"), typ, grp, f("notes"), acc["id"]))
+            flash("Account updated.", "ok")
+        else:
+            if typ not in books.TYPE_NAME:
+                flash("Choose what kind of account this is.", "error")
+                return redirect(url_for("accounts"))
+            if grp not in books.GROUPS[typ]:
+                grp = books.GROUPS[typ][-1]
+            conn.insert("accounts", dict(name=name, code=f("code"), type=typ, grp=grp, sys_key="",
+                                         notes=f("notes"), created_at=today_str()))
+            flash("Account \u201c{}\u201d added.".format(name), "ok")
+    return redirect(url_for("accounts"))
+
+
+@app.route("/accounts/<int:acc_id>/toggle", methods=["POST"])
+@admin_required
+def accounts_toggle(acc_id):
+    with get_db() as conn:
+        acc = _account(conn, acc_id)
+        if acc and acc["sys_key"]:
+            flash("The app posts to \u201c{}\u201d on its own, so it cannot be archived.".format(acc["name"]), "error")
+        elif acc:
+            conn.execute("UPDATE accounts SET active = ? WHERE id = ?", (0 if acc["active"] else 1, acc_id))
+            flash("Account archived - it keeps its history." if acc["active"] else "Account restored.", "ok")
+    return redirect(url_for("accounts"))
+
+
+@app.route("/ledger")
+def ledger():
+    start, end, preset = resolve_range("fy")
+    party = request.args.get("party") or None
+    with get_db() as conn:
+        accs = books.all_accounts(conn)
+        K = books.key_ids(conn)
+        acc_id = request.args.get("account", type=int) or K["cash"]
+        lg = books.ledger(conn, acc_id, start, end, party=party)
+        if lg is None:
+            return redirect(url_for("ledger"))
+        parties = []
+        if lg["account"]["sys_key"] in books.PARTY_KEYS:
+            parties = books.outstanding(conn, max(end, today_str()))[lg["account"]["sys_key"]]["rows"]
+        return render_template("ledger.html", s=get_settings(conn), lg=lg, accounts=accs,
+                               parties=parties, party=party or "", start=start, end=end,
+                               preset=preset, presets=PRESETS, tabs=STATEMENT_TABS)
+
+
+# ---- statements
+
+@app.route("/profit-loss")
+def profit_loss():
+    start, end, preset = resolve_range("fy")
+    with get_db() as conn:
+        return render_template("profit_loss.html", s=get_settings(conn), pl=books.profit_and_loss(conn, start, end),
+                               start=start, end=end, preset=preset, presets=PRESETS, tabs=STATEMENT_TABS)
+
+
+@app.route("/balance-sheet")
+def balance_sheet():
+    as_at = _valid_date(request.args.get("as_at") or "") or today_str()
+    with get_db() as conn:
+        return render_template("balance_sheet.html", s=get_settings(conn), bs=books.balance_sheet(conn, as_at),
+                               check=books.inventory_check(conn) if as_at >= today_str() else None,
+                               tabs=STATEMENT_TABS)
+
+
+@app.route("/trial-balance")
+def trial_balance():
+    start, end, preset = resolve_range("fy")
+    with get_db() as conn:
+        return render_template("trial_balance.html", s=get_settings(conn), tb=books.trial_balance(conn, start, end),
+                               start=start, end=end, preset=preset, presets=PRESETS, tabs=STATEMENT_TABS)
+
+
+@app.route("/outstanding")
+def outstanding():
+    as_at = _valid_date(request.args.get("as_at") or "") or today_str()
+    with get_db() as conn:
+        K = books.key_ids(conn)
+        return render_template("outstanding.html", s=get_settings(conn), o=books.outstanding(conn, as_at),
+                               as_at=as_at, K=K, tabs=STATEMENT_TABS)
+
+
 # --------------------------------------------------------------- exports
 
 def _csv(filename, header, rows):
@@ -1032,100 +1624,254 @@ def _csv(filename, header, rows):
                     headers={"Content-Disposition": 'attachment; filename="{}"'.format(filename)})
 
 
+EXPORT_KINDS = ["sales", "purchases", "expenses", "vouchers", "production", "journal", "trial-balance",
+                "profit-loss", "balance-sheet", "outstanding", "gst", "itemwise", "stock", "raw", "accounts"]
+
+
+def export_table(conn, kind, start, end):
+    """(filename, header, rows) for one register or statement, or None."""
+    if kind == "sales":
+        rows = conn.query(
+            "SELECT * FROM sales WHERE invoice_date >= ? AND invoice_date <= ? ORDER BY invoice_date, id",
+            (start, end))
+        return ("sales-register-{}-to-{}.csv".format(start, end),
+                ["Invoice No", "Date", "Customer", "State", "Supply Type", "Taxable",
+                 "CGST", "SGST", "IGST", "Round Off", "Invoice Total", "Cost", "Profit", "Payment"],
+                [[r["invoice_no"], r["invoice_date"], r["party_name"],
+                  STATE_NAME.get(r["state_code"], r["state_code"]),
+                  "Inter-state" if r["interstate"] else "Intra-state",
+                  r["taxable"], r["cgst"], r["sgst"], r["igst"], r["round_off"],
+                  r["total"], r["cogs"], money(float(r["taxable"]) - float(r["cogs"])),
+                  r["payment_mode"]] for r in rows])
+
+    if kind == "purchases":
+        rows = conn.query(
+            "SELECT * FROM purchases WHERE bill_date >= ? AND bill_date <= ? ORDER BY bill_date, id",
+            (start, end))
+        return ("purchase-register-{}-to-{}.csv".format(start, end),
+                ["Bill No", "Date", "Supplier", "State", "Supply Type", "Taxable",
+                 "CGST", "SGST", "IGST", "Round Off", "Bill Total", "Payment"],
+                [[r["bill_no"], r["bill_date"], r["party_name"],
+                  STATE_NAME.get(r["state_code"], r["state_code"]),
+                  "Inter-state" if r["interstate"] else "Intra-state",
+                  r["taxable"], r["cgst"], r["sgst"], r["igst"], r["round_off"],
+                  r["total"], r["payment_mode"]] for r in rows])
+
+    if kind == "expenses":
+        rows = conn.query(
+            "SELECT e.*, a.name AS head FROM expenses e LEFT JOIN accounts a ON a.id = e.account_id "
+            "WHERE e.exp_date >= ? AND e.exp_date <= ? ORDER BY e.exp_date, e.id", (start, end))
+        return ("expenses-{}-to-{}.csv".format(start, end),
+                ["Date", "Ref", "Head", "Description", "Paid to", "Amount", "GST %", "CGST", "SGST",
+                 "IGST", "Total", "Payment"],
+                [[r["exp_date"], r["ref_no"], r["head"], r["description"], r["party_name"], r["amount"],
+                  r["gst_rate"], r["cgst"], r["sgst"], r["igst"], r["total"], r["payment_mode"]] for r in rows])
+
+    if kind == "vouchers":
+        rows = conn.query(
+            "SELECT v.*, a.name AS account_name FROM vouchers v LEFT JOIN accounts a ON a.id = v.account_id "
+            "WHERE v.v_date >= ? AND v.v_date <= ? ORDER BY v.v_date, v.id", (start, end))
+        return ("receipts-payments-{}-to-{}.csv".format(start, end),
+                ["Voucher No", "Date", "Type", "Account", "Party", "Amount", "Mode", "Ref", "Notes"],
+                [[r["v_no"], r["v_date"], r["v_type"].title(), r["account_name"], r["party_name"],
+                  r["amount"], r["payment_mode"], r["ref_no"], r["notes"]] for r in rows])
+
+    if kind == "journal":
+        names = {a["id"]: a for a in books.all_accounts(conn)}
+        out = []
+        for e in books.build(conn, start=start, end=end):
+            for l in e["lines"]:
+                a = names.get(l["acc"], {})
+                out.append([e["date"], e["kind"].title(), e["ref"], e["narration"], a.get("code", ""),
+                            a.get("name", "?"), l["party_name"], l["dr"] or "", l["cr"] or ""])
+        return ("journal-{}-to-{}.csv".format(start, end),
+                ["Date", "Type", "Ref", "Narration", "Code", "Account", "Party", "Debit", "Credit"], out)
+
+    if kind == "ledger":
+        lg = books.ledger(conn, request.args.get("account", type=int) or 0, start, end,
+                          party=request.args.get("party") or None)
+        if not lg:
+            return None
+        out = [["", "Opening balance", "", "", "", "", lg["opening"]]]
+        out += [[r["date"], r["narration"], r["ref"], r["against"], r["dr"] or "", r["cr"] or "", r["balance"]]
+                for r in lg["rows"]]
+        out.append(["", "Closing balance", "", "", lg["tot_dr"], lg["tot_cr"], lg["closing"]])
+        slug = "".join(ch if ch.isalnum() else "-" for ch in lg["account"]["name"].lower()).strip("-")
+        return ("ledger-{}-{}-to-{}.csv".format(slug, start, end),
+                ["Date", "Particulars", "Ref", "Against", "Debit", "Credit", "Balance"], out)
+
+    if kind == "trial-balance":
+        tb = books.trial_balance(conn, start, end)
+        out = [[r["code"], r["name"], books.TYPE_NAME.get(r["type"], r["type"]), r["grp"],
+                r["open_dr"], r["open_cr"], r["dr"], r["cr"], r["close_dr"], r["close_cr"]] for r in tb["rows"]]
+        t = tb["tot"]
+        out.append(["", "Total", "", "", t["open_dr"], t["open_cr"], t["dr"], t["cr"], t["close_dr"], t["close_cr"]])
+        return ("trial-balance-{}-to-{}.csv".format(start, end),
+                ["Code", "Account", "Type", "Group", "Opening Dr", "Opening Cr", "Debit", "Credit",
+                 "Closing Dr", "Closing Cr"], out)
+
+    if kind == "profit-loss":
+        pl = books.profit_and_loss(conn, start, end)
+        out = []
+        for title, sec in (("Sales", pl["sales"]), ("Less: direct expenses", pl["direct"])):
+            out.append([title, ""])
+            out += [["  " + r["name"], r["amount"]] for r in sec["rows"]]
+        out.append(["Gross profit", pl["gross"]])
+        for title, sec in (("Add: other income", pl["ind_inc"]), ("Less: indirect expenses", pl["ind_exp"])):
+            out.append([title, ""])
+            out += [["  " + r["name"], r["amount"]] for r in sec["rows"]]
+        out.append(["Net profit" if pl["net"] >= 0 else "Net loss", pl["net"]])
+        return ("profit-and-loss-{}-to-{}.csv".format(start, end),
+                ["Profit & loss {} to {}".format(start, end), "Amount"], out)
+
+    if kind == "balance-sheet":
+        bs = books.balance_sheet(conn, end)
+        out = []
+        for title, groups, total in (("ASSETS", bs["assets"], bs["total_assets"]),
+                                     ("LIABILITIES", bs["liabilities"], bs["total_liab"]),
+                                     ("CAPITAL", bs["equity"], bs["total_equity"])):
+            out.append([title, "", ""])
+            for g in groups:
+                out.append(["  " + g["name"], "", g["total"]])
+                out += [["    " + r["name"], r["amount"], ""] for r in g["rows"]]
+            out.append(["Total " + title.lower(), "", total])
+            out.append([])
+        out.append(["Liabilities + capital", "", bs["total_le"]])
+        return ("balance-sheet-as-at-{}.csv".format(end),
+                ["Balance sheet as at {}".format(end), "Amount", "Total"], out)
+
+    if kind == "outstanding":
+        o = books.outstanding(conn, end)
+        out = []
+        for key, label in (("debtors", "Receivable"), ("creditors", "Payable")):
+            out += [[label, r["name"], r["phone"], r["billed"], r["settled"], r["amount"], r["last"], r["days"]]
+                    for r in o[key]["rows"]]
+        return ("outstanding-as-at-{}.csv".format(end),
+                ["Side", "Party", "Phone", "Billed", "Settled", "Outstanding", "Last entry", "Days since"], out)
+
+    if kind == "accounts":
+        rows = books.all_accounts(conn)
+        bal = books.balances(books.build(conn, end=end), rows)
+        return ("chart-of-accounts-{}.csv".format(end),
+                ["Code", "Account", "Type", "Group", "Balance as at " + end, "Active"],
+                [[r["code"], r["name"], books.TYPE_NAME.get(r["type"]), r["grp"], bal.get(r["id"], 0.0),
+                  "Yes" if r["active"] else "No"] for r in rows])
+
+    if kind == "stock":
+        rows = core.stock_rows(conn)
+        return ("stock-{}.csv".format(today_str()),
+                ["Item", "HSN", "GST %", "Unit", "Stock Qty", "Avg Cost",
+                 "Stock Value", "Sale Rate", "Low Stock At", "Status"],
+                [[r["name"], r["hsn"], r["gst_rate"], r["unit"], r["stock_qty"],
+                  r["avg_cost"], r["stock_value"], r["sale_rate"],
+                  r["low_stock_qty"], "LOW" if r["low"] else "OK"] for r in rows])
+
+    if kind == "raw":
+        out = []
+        for r in core.raw_material_rows(conn):
+            used_in = "; ".join("{}: {}".format(u["product_name"], u["q"]) for u in r["per_product"])
+            out.append([r["name"], r["unit"], r["opening"], r["bought"], r["bought_value"],
+                        r["used"], used_in, r["left"], r["avg_cost"], r["left_value"]])
+        return ("raw-materials-{}.csv".format(today_str()),
+                ["Raw material", "Unit", "Opening", "Bought", "Bought value", "Used",
+                 "Used in (product: qty)", "Left", "Avg cost", "Left value"], out)
+
+    if kind == "production":
+        rows = conn.query(
+            "SELECT * FROM productions WHERE prod_date >= ? AND prod_date <= ? ORDER BY prod_date, id",
+            (start, end))
+        lines = {}
+        for l in conn.query("SELECT l.* FROM production_lines l JOIN productions p ON p.id = l.production_id "
+                            "WHERE p.prod_date >= ? AND p.prod_date <= ? ORDER BY l.id", (start, end)):
+            lines.setdefault(l["production_id"], []).append(l)
+        out = []
+        for r in rows:
+            for l in lines.get(r["id"], []):
+                out.append([r["batch_no"], r["prod_date"], r["product_name"], r["qty_out"],
+                            l["raw_name"], l["qty"], l["cost_rate"], l["cost"],
+                            r["other_cost"], r["total_cost"]])
+        return ("production-{}-to-{}.csv".format(start, end),
+                ["Batch", "Date", "Product", "Qty made", "Raw material", "Qty used",
+                 "Cost rate", "Cost", "Other cost", "Batch total cost"], out)
+
+    if kind == "gst":
+        rep = _report(conn, start, end)
+        out = [["OUTPUT TAX (on sales)", "", "", "", ""],
+               ["GST Rate %", "Taxable Value", "CGST", "SGST", "IGST"]]
+        for b in rep["sale_breakup"]:
+            out.append([b["gst_rate"], b["taxable"], b["cgst"], b["sgst"], b["igst"]])
+        out.append(["Total", rep["sale_tot"]["taxable"], rep["sale_tot"]["cgst"],
+                    rep["sale_tot"]["sgst"], rep["sale_tot"]["igst"]])
+        out.append([])
+        out.append(["INPUT TAX CREDIT (on purchases)", "", "", "", ""])
+        out.append(["GST Rate %", "Taxable Value", "CGST", "SGST", "IGST"])
+        for b in rep["purch_breakup"]:
+            out.append([b["gst_rate"], b["taxable"], b["cgst"], b["sgst"], b["igst"]])
+        out.append(["Total", rep["purch_tot"]["taxable"], rep["purch_tot"]["cgst"],
+                    rep["purch_tot"]["sgst"], rep["purch_tot"]["igst"]])
+        exp = conn.query_one(
+            "SELECT COALESCE(SUM(amount),0) AS a, COALESCE(SUM(cgst),0) AS c, COALESCE(SUM(sgst),0) AS s, "
+            "COALESCE(SUM(igst),0) AS i FROM expenses WHERE exp_date >= ? AND exp_date <= ?", (start, end))
+        exp_tax = money(float(exp["c"]) + float(exp["s"]) + float(exp["i"]))
+        out.append([])
+        out.append(["INPUT TAX CREDIT (on expenses)", "", "", "", ""])
+        out.append(["All rates", money(exp["a"]), money(exp["c"]), money(exp["s"]), money(exp["i"])])
+        out.append([])
+        out.append(["Output tax", rep["out_tax"]])
+        out.append(["Input tax credit (purchases + expenses)", money(rep["in_tax"] + exp_tax)])
+        out.append(["Net GST payable", money(rep["out_tax"] - rep["in_tax"] - exp_tax)])
+        return ("gst-summary-{}-to-{}.csv".format(start, end),
+                ["GST summary {} to {}".format(start, end), "", "", "", ""], out)
+
+    if kind == "itemwise":
+        rep = _report(conn, start, end)
+        return ("item-profit-{}-to-{}.csv".format(start, end),
+                ["Item", "Qty Sold", "Revenue (taxable)", "Cost", "Profit", "Margin %"],
+                [[b["name"], b["qty"], b["revenue"], b["cost"], b["profit"], b["margin"]]
+                 for b in rep["items_sold"]])
+    return None
+
+
 @app.route("/export/<kind>.csv")
 def export(kind):
     start, end, _preset = resolve_range()
     with get_db() as conn:
-        if kind == "sales":
-            rows = conn.query(
-                "SELECT * FROM sales WHERE invoice_date >= ? AND invoice_date <= ? ORDER BY invoice_date, id",
-                (start, end))
-            return _csv("sales-register-{}-to-{}.csv".format(start, end),
-                        ["Invoice No", "Date", "Customer", "State", "Supply Type", "Taxable",
-                         "CGST", "SGST", "IGST", "Round Off", "Invoice Total", "Cost", "Profit", "Payment"],
-                        [[r["invoice_no"], r["invoice_date"], r["party_name"],
-                          STATE_NAME.get(r["state_code"], r["state_code"]),
-                          "Inter-state" if r["interstate"] else "Intra-state",
-                          r["taxable"], r["cgst"], r["sgst"], r["igst"], r["round_off"],
-                          r["total"], r["cogs"], money(float(r["taxable"]) - float(r["cogs"])),
-                          r["payment_mode"]] for r in rows])
+        table = export_table(conn, kind, start, end)
+    if table is None:
+        return redirect(url_for("reports"))
+    return _csv(*table)
 
-        if kind == "purchases":
-            rows = conn.query(
-                "SELECT * FROM purchases WHERE bill_date >= ? AND bill_date <= ? ORDER BY bill_date, id",
-                (start, end))
-            return _csv("purchase-register-{}-to-{}.csv".format(start, end),
-                        ["Bill No", "Date", "Supplier", "State", "Supply Type", "Taxable",
-                         "CGST", "SGST", "IGST", "Round Off", "Bill Total", "Payment"],
-                        [[r["bill_no"], r["bill_date"], r["party_name"],
-                          STATE_NAME.get(r["state_code"], r["state_code"]),
-                          "Inter-state" if r["interstate"] else "Intra-state",
-                          r["taxable"], r["cgst"], r["sgst"], r["igst"], r["round_off"],
-                          r["total"], r["payment_mode"]] for r in rows])
 
-        if kind == "stock":
-            rows = core.stock_rows(conn)
-            return _csv("stock-{}.csv".format(today_str()),
-                        ["Item", "HSN", "GST %", "Unit", "Stock Qty", "Avg Cost",
-                         "Stock Value", "Sale Rate", "Low Stock At", "Status"],
-                        [[r["name"], r["hsn"], r["gst_rate"], r["unit"], r["stock_qty"],
-                          r["avg_cost"], r["stock_value"], r["sale_rate"],
-                          r["low_stock_qty"], "LOW" if r["low"] else "OK"] for r in rows])
-
-        if kind == "raw":
-            out = []
-            for r in core.raw_material_rows(conn):
-                used_in = "; ".join("{}: {}".format(u["product_name"], u["q"]) for u in r["per_product"])
-                out.append([r["name"], r["unit"], r["opening"], r["bought"], r["bought_value"],
-                            r["used"], used_in, r["left"], r["avg_cost"], r["left_value"]])
-            return _csv("raw-materials-{}.csv".format(today_str()),
-                        ["Raw material", "Unit", "Opening", "Bought", "Bought value", "Used",
-                         "Used in (product: qty)", "Left", "Avg cost", "Left value"], out)
-
-        if kind == "production":
-            rows = conn.query(
-                "SELECT * FROM productions WHERE prod_date >= ? AND prod_date <= ? ORDER BY prod_date, id",
-                (start, end))
-            out = []
-            for r in rows:
-                for l in conn.query("SELECT * FROM production_lines WHERE production_id = ? ORDER BY id", (r["id"],)):
-                    out.append([r["batch_no"], r["prod_date"], r["product_name"], r["qty_out"],
-                                l["raw_name"], l["qty"], l["cost_rate"], l["cost"],
-                                r["other_cost"], r["total_cost"]])
-            return _csv("production-{}-to-{}.csv".format(start, end),
-                        ["Batch", "Date", "Product", "Qty made", "Raw material", "Qty used",
-                         "Cost rate", "Cost", "Other cost", "Batch total cost"], out)
-
-        if kind == "gst":
-            rep = _report(conn, start, end)
-            out = [["OUTPUT TAX (on sales)", "", "", "", ""],
-                   ["GST Rate %", "Taxable Value", "CGST", "SGST", "IGST"]]
-            for b in rep["sale_breakup"]:
-                out.append([b["gst_rate"], b["taxable"], b["cgst"], b["sgst"], b["igst"]])
-            out.append(["Total", rep["sale_tot"]["taxable"], rep["sale_tot"]["cgst"],
-                        rep["sale_tot"]["sgst"], rep["sale_tot"]["igst"]])
-            out.append([])
-            out.append(["INPUT TAX CREDIT (on purchases)", "", "", "", ""])
-            out.append(["GST Rate %", "Taxable Value", "CGST", "SGST", "IGST"])
-            for b in rep["purch_breakup"]:
-                out.append([b["gst_rate"], b["taxable"], b["cgst"], b["sgst"], b["igst"]])
-            out.append(["Total", rep["purch_tot"]["taxable"], rep["purch_tot"]["cgst"],
-                        rep["purch_tot"]["sgst"], rep["purch_tot"]["igst"]])
-            out.append([])
-            out.append(["Output tax", rep["out_tax"]])
-            out.append(["Input tax credit", rep["in_tax"]])
-            out.append(["Net GST payable", rep["net_gst"]])
-            return _csv("gst-summary-{}-to-{}.csv".format(start, end),
-                        ["GST summary {} to {}".format(start, end), "", "", "", ""], out)
-
-        if kind == "itemwise":
-            rep = _report(conn, start, end)
-            return _csv("item-profit-{}-to-{}.csv".format(start, end),
-                        ["Item", "Qty Sold", "Revenue (taxable)", "Cost", "Profit", "Margin %"],
-                        [[b["name"], b["qty"], b["revenue"], b["cost"], b["profit"], b["margin"]]
-                         for b in rep["items_sold"]])
-
-    return redirect(url_for("reports"))
+@app.route("/export/books.zip")
+def export_books():
+    """Every register and statement for a period in one download - the pack
+    to hand an accountant at year end."""
+    start, end, _preset = resolve_range("fy")
+    buf = io.BytesIO()
+    with get_db() as conn:
+        s = get_settings(conn)
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for kind in EXPORT_KINDS:
+                table = export_table(conn, kind, start, end)
+                if not table:
+                    continue
+                name, header, rows = table
+                b = io.StringIO()
+                w = csv.writer(b)
+                w.writerow(header)
+                w.writerows(rows)
+                z.writestr(name, b.getvalue())
+            z.writestr("README.txt",
+                       "{}\nBooks pack for {} to {}, exported {}.\n\n"
+                       "Every file is a CSV that opens in Excel or Google Sheets.\n"
+                       "The journal, trial balance, profit & loss and balance sheet are\n"
+                       "generated from the same sales, purchases, production, expenses and\n"
+                       "receipts/payments listed in the registers, so they reconcile.\n"
+                       "Figures are a working view for planning and for your accountant;\n"
+                       "they are not a filed return.\n".format(s["business_name"], start, end,
+                                                                datetime.now().strftime("%d %b %Y %H:%M")))
+    return Response(buf.getvalue(), mimetype="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="books-{}-to-{}.zip"'.format(start, end)})
 
 
 # -------------------------------------------------------------- settings
@@ -1192,12 +1938,13 @@ def settings():
         if request.method == "POST":
             conn.execute(
                 "UPDATE settings SET business_name=?, gstin=?, address=?, state_code=?, "
-                "phone=?, email=?, invoice_prefix=?, gst_enabled=?, bank_details=?, terms=? WHERE id=1",
+                "phone=?, email=?, invoice_prefix=?, gst_enabled=?, bank_details=?, terms=?, "
+                "books_start=? WHERE id=1",
                 (f("business_name", "My Dry Fruits Business"), f("gstin").upper(), f("address"),
                  f("state_code", "27"), f("phone"), f("email"),
                  f("invoice_prefix", "SDF") or "SDF",
                  1 if request.form.get("gst_enabled") else 0,
-                 f("bank_details"), f("terms")))
+                 f("bank_details"), f("terms"), _valid_date(f("books_start"))))
             flash("Settings saved.", "ok")
             return redirect(url_for("settings"))
         return render_template("settings.html", s=get_settings(conn))
@@ -1490,7 +2237,19 @@ def healthz():
     return {"ok": True}
 
 
-init_db()
+def _boot():
+    """Schema, chart of accounts, and a one-off replay when an upgrade added a
+    computed column."""
+    needs_rebuild = init_db()
+    with get_db() as conn:
+        if IS_PG:   # two workers boot together; let one seed at a time
+            conn.execute("SELECT pg_advisory_xact_lock(724100)")
+        books.ensure_accounts(conn)
+        if needs_rebuild:
+            core.rebuild_stock(conn)
+
+
+_boot()
 
 
 def _load_secret():

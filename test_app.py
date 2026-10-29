@@ -19,7 +19,20 @@ from core import amount_in_words, compute_line        # noqa: E402
 from db import get_db                                 # noqa: E402
 
 app.config["TESTING"] = True
-c = app.test_client()
+
+OWNER = "ramesh.goswami100@gmail.com"
+OWNER_PW = "owner-pass-123"
+
+
+def signed_in_client():
+    cl = app.test_client()
+    cl.post("/login", data=dict(email=OWNER, password=OWNER_PW))
+    return cl
+
+
+# The owner sets a password on first run (local SQLite, no PIN: no code needed).
+app.test_client().post("/setup", data=dict(email=OWNER, password=OWNER_PW, confirm=OWNER_PW))
+c = signed_in_client()
 
 FAILS = []
 
@@ -274,7 +287,7 @@ check("an all-time range still renders", wide.status_code, 200)
 
 
 print("\n=== 14. Admin gate ===")
-locked = app.test_client()   # a fresh session: admin is locked here
+locked = signed_in_client()   # a fresh session: admin is locked here
 for path in ["/sales/1/edit", "/purchases/1/edit"]:
     r = locked.get(path)
     check("locked session cannot open " + path, r.status_code in (301, 302), True)
@@ -440,97 +453,336 @@ pm = _re.search(r'id="bill_no"[^>]*', pbody)
 check("a supplier bill number is still entered by hand", 'name="bill_no"' in (pm.group(0) if pm else ""), True)
 
 
-print("\n=== 18. Raw materials -> production batch -> product (7 in 1 seeds) ===")
-SEEDS = ["Pumpkin Seeds", "Sunflower Seeds", "Flax Seeds", "Chia Seeds",
-         "Watermelon Seeds", "Sesame Seeds", "Muskmelon Seeds"]
-for i, n in enumerate(SEEDS):
-    c.post("/items/save", data=dict(name=n, kind="raw", hsn="1207", gst_rate="5", unit="kg"), follow_redirects=True)
-c.post("/items/save", data=dict(name="7 in 1 Mixed Seeds", kind="product", hsn="2008", gst_rate="5",
-                                unit="kg", sale_rate="900"), follow_redirects=True)
-MIX = item_id("7 in 1 Mixed Seeds")
-SEED_IDS = [item_id(n) for n in SEEDS]
-with get_db() as conn:
-    check("raw material saved with its type", conn.query_one("SELECT kind FROM items WHERE id = ?", (SEED_IDS[0],))["kind"], "raw")
-    check("product saved with its type", conn.query_one("SELECT kind FROM items WHERE id = ?", (MIX,))["kind"], "product")
-
-# buy 10 kg of each seed, priced 200, 210, ... 260 per kg
-post_doc("/purchases/new", dict(bill_no="RM-1", bill_date="2026-10-01", state_code="27"),
-         [(sid, 10, 200 + 10 * i, 0) for i, sid in enumerate(SEED_IDS)])
-
-# the batch: 1 kg of each seed -> 6.5 kg of mix (roasting loss), 70 rupees of packing
-r = c.post("/production/new", data=dict(
-    prod_date="2026-10-02", product_id=str(MIX), qty_out="6.5", other_cost="70", notes="first batch",
-    raw_id=[str(x) for x in SEED_IDS], raw_qty=["1"] * 7, save_recipe="1"), follow_redirects=False)
-check("batch saves and redirects to its page", r.status_code, 302)
-with get_db() as conn:
-    b = conn.query_one("SELECT * FROM productions ORDER BY id DESC LIMIT 1")
-    check("batch number generated", b["batch_no"], "BATCH-0001")
-    check("raw cost = sum of each seed at its cost", b["raw_cost"], sum(200 + 10 * i for i in range(7)))   # 1610
-    check("batch cost adds the other costs", b["total_cost"], 1680)
-    check("each seed down to 9 kg", conn.query_one("SELECT stock_qty FROM items WHERE id = ?", (SEED_IDS[3],))["stock_qty"], 9)
-    mix = conn.query_one("SELECT stock_qty, stock_value FROM items WHERE id = ?", (MIX,))
-    check("product added to stock", mix["stock_qty"], 6.5)
-    check("product carries the batch cost", mix["stock_value"], 1680)
-    rec = conn.query("SELECT qty_per_unit FROM recipe_lines WHERE product_id = ?", (MIX,))
-    check("recipe saved from the batch, per kg made", (len(rec), round(rec[0]["qty_per_unit"], 4)), (7, round(1 / 6.5, 4)))
-
-# selling the mix costs it at the batch's cost per kg
-post_doc("/sales/new", dict(invoice_date="2026-10-03", state_code="27"), [(MIX, 2, 900, 0)])
-with get_db() as conn:
-    s_ = conn.query_one("SELECT cogs FROM sales ORDER BY id DESC LIMIT 1")
-    check("sale of the mix is costed from production", s_["cogs"], round(1680 / 6.5, 2) * 2, tol=0.02)
+print("\n=== 18. Sign-in protects every page ===")
+import re as _re2  # noqa: E402
+anon = app.test_client()
+for path in ["/", "/sales", "/stock", "/reports", "/export/sales.csv", "/settings", "/users"]:
+    r = anon.get(path)
+    check("signed-out " + path + " goes to sign in",
+          r.status_code in (301, 302) and "/login" in r.headers.get("Location", ""), True)
+r = anon.post("/sales/new", data={"invoice_date": "2026-09-09"})
+check("signed-out POST is refused", "/login" in r.headers.get("Location", ""), True)
+check("health check stays open for Render", anon.get("/healthz").status_code, 200)
+check("sign-in page loads", anon.get("/login").status_code, 200)
 
 with get_db() as conn:
-    rows = {r["name"]: r for r in core.raw_material_rows(conn)}
-    p = rows["Pumpkin Seeds"]
-    check("report: bought", p["bought"], 10)
-    check("report: used", p["used"], 1)
-    check("report: left", p["left"], 9)
-    check("report: used per product", (p["per_product"][0]["product_name"], p["per_product"][0]["q"]),
-          ("7 in 1 Mixed Seeds", 1))
-    cm = core.can_make(conn, MIX)
-    check("can still make: 9 kg of each seed at 1/6.5 kg per kg", cm["qty"], 58.5, tol=0.01)
-
-body = c.get("/raw-materials").get_data(as_text=True)
-check("raw materials page renders", "Bought, used and left" in body and "Pumpkin Seeds" in body, True)
-check("raw materials page shows what can still be made", "58.5" in body, True)
-check("production register renders", "BATCH-0001" in c.get("/production").get_data(as_text=True), True)
-check("batch page renders", c.get("/production/" + str(b["id"])).status_code, 200)
-check("new batch form renders", c.get("/production/new?product=" + str(MIX)).status_code, 200)
-check("recipe page renders", c.get("/recipes/" + str(MIX)).status_code, 200)
-check("raw materials CSV", "Used in" in c.get("/export/raw.csv").get_data(as_text=True), True)
-check("production CSV", "BATCH-0001" in c.get("/export/production.csv?preset=all").get_data(as_text=True), True)
-check("raw materials stay off the quick sale screen", "Pumpkin Seeds" in c.get("/quick").get_data(as_text=True), False)
-check("but the product is on it", "7 in 1 Mixed Seeds" in c.get("/quick").get_data(as_text=True), True)
-check("raw materials are offered on purchases", "Pumpkin Seeds" in c.get("/purchases/new").get_data(as_text=True), True)
-
-# a recipe set by hand, for a 10 kg batch
-c.post("/recipes/" + str(MIX), data=dict(per_qty="10", raw_id=[str(x) for x in SEED_IDS],
-                                         raw_qty=["1.5"] * 7), follow_redirects=True)
+    seeded = {r["email"]: r["role"] for r in conn.query("SELECT email, role FROM users")}
+check("Ramesh is seeded as owner", seeded.get(OWNER), "owner")
+check("Saurabh is seeded as owner too", seeded.get("saurabhsethi9211@gmail.com"), "owner")
 with get_db() as conn:
-    check("hand-set recipe stored per kg", conn.query_one("SELECT qty_per_unit FROM recipe_lines WHERE product_id = ?", (MIX,))["qty_per_unit"], 0.15)
+    row = conn.query_one("SELECT pw_hash FROM users WHERE email = ?", (OWNER,))
+check("password stored hashed", OWNER_PW not in row["pw_hash"] and len(row["pw_hash"]) == 64, True)
 
-# a batch using more than is left is saved but flagged
-r = c.post("/production/new", data=dict(prod_date="2026-10-04", product_id=str(MIX), qty_out="1",
-           raw_id=[str(SEED_IDS[0])], raw_qty=["50"]), follow_redirects=True)
-check("a short batch is flagged", "went negative" in r.get_data(as_text=True), True)
+r = anon.post("/login", data=dict(email=OWNER, password="wrong"), follow_redirects=True)
+check("wrong password refused", "do not match" in r.get_data(as_text=True), True)
+r = anon.post("/login", data=dict(email="stranger@gmail.com", password="whatever1"), follow_redirects=True)
+check("unknown email refused", "do not match" in r.get_data(as_text=True), True)
+r = anon.post("/login", data=dict(email="SaurabhSethi9211@gmail.com", password="x"), follow_redirects=True)
+check("listed but not activated is told to ask for a link", "set-password link" in r.get_data(as_text=True), True)
+r = anon.post("/login", data=dict(email="  Ramesh.Goswami100@GMAIL.com ", password=OWNER_PW, next="/stock"))
+check("email is case-insensitive and next is honoured", r.headers.get("Location", "").endswith("/stock"), True)
+check("signed in can open the dashboard", anon.get("/").status_code, 200)
+r = app.test_client().post("/login", data=dict(email=OWNER, password=OWNER_PW, next="https://evil.example/"))
+check("next cannot send you off-site", "evil" in r.headers.get("Location", ""), False)
+check("setup page is closed once an owner exists",
+      app.test_client().get("/setup").status_code in (301, 302), True)
+
+print("\n=== 19. Owner grants access with a one-time link ===")
+r = c.post("/users/add", data=dict(email="New.Member@gmail.com", role="member"), follow_redirects=True)
+body = r.get_data(as_text=True)
+m = _re2.search(r'(https?://[^"\s]+/set-password/[A-Za-z0-9_\-]+)', body)
+check("an invite link is shown", bool(m), True)
+link = m.group(1).split("localhost", 1)[-1] if m else ""
+s2 = app.test_client()
+check("invite link opens the set-password page", s2.get(link).status_code, 200)
+r = s2.post(link, data=dict(password="short", confirm="short"), follow_redirects=True)
+check("short password refused", "at least 8" in r.get_data(as_text=True), True)
+r = s2.post(link, data=dict(password="member-pass-1", confirm="member-pass-1"))
+check("setting password signs them in", s2.get("/").status_code, 200)
+check("the link cannot be reused",
+      "expired or was already used" in app.test_client().get(link).get_data(as_text=True), True)
+check("a member cannot manage users", s2.get("/users").status_code, 403)
+check("a member does not see Users in the menu", "Users &amp; access" in s2.get("/").get_data(as_text=True), False)
+
+r = c.post("/users/add", data=dict(email="new.helper@gmail.com", name="Helper"), follow_redirects=True)
+check("owner can add anyone else", "new.helper@gmail.com" in r.get_data(as_text=True), True)
+r = c.post("/users/add", data=dict(email="not-an-email"), follow_redirects=True)
+check("bad email refused", "valid email" in r.get_data(as_text=True), True)
+
 with get_db() as conn:
-    short = conn.query_one("SELECT id FROM productions ORDER BY id DESC LIMIT 1")["id"]
+    sid_ = conn.query_one("SELECT id FROM users WHERE email = 'new.member@gmail.com'")["id"]
+    oid = conn.query_one("SELECT id FROM users WHERE email = ?", (OWNER,))["id"]
+c.post("/users/" + str(sid_) + "/disable")
+check("disabling signs them out at once", s2.get("/").status_code in (301, 302), True)
+r = app.test_client().post("/login", data=dict(email="new.member@gmail.com", password="member-pass-1"),
+                           follow_redirects=True)
+check("and they cannot sign back in", "do not match" in r.get_data(as_text=True), True)
+c.post("/users/" + str(sid_) + "/enable")
+r = app.test_client().post("/login", data=dict(email="new.member@gmail.com", password="member-pass-1"))
+check("re-enabled user can sign in again", r.headers.get("Location", "").endswith("/"), True)
+r = c.post("/users/" + str(oid) + "/remove", follow_redirects=True)
+check("owner cannot remove themself", "your own account" in r.get_data(as_text=True), True)
 
-# editing (admin) re-costs, deleting gives the raw material back
-r = c.post("/production/" + str(short) + "/edit", data=dict(prod_date="2026-10-04", product_id=str(MIX),
-           qty_out="1", raw_id=[str(SEED_IDS[0])], raw_qty=["2"]), follow_redirects=True)
+print("\n=== 20. Lockout after repeated wrong passwords ===")
+t = app.test_client()
+for _ in range(5):
+    t.post("/login", data=dict(email="new.member@gmail.com", password="nope-nope"))
+r = t.post("/login", data=dict(email="new.member@gmail.com", password="member-pass-1"), follow_redirects=True)
+check("even the right password waits out the lock", "Too many wrong tries" in r.get_data(as_text=True), True)
 with get_db() as conn:
-    check("edited batch takes the new quantity", conn.query_one("SELECT stock_qty FROM items WHERE id = ?", (SEED_IDS[0],))["stock_qty"], 7)
-c.post("/production/" + str(short) + "/delete", follow_redirects=True)
+    conn.execute("UPDATE users SET locked_until = '' WHERE id = ?", (sid_,))
+
+print("\n=== 21. Changing your password signs out other devices ===")
+other = signed_in_client()
+mine = signed_in_client()
+mine.post("/account", data=dict(current=OWNER_PW, password="owner-pass-456", confirm="owner-pass-456"))
+check("this device stays signed in", mine.get("/").status_code, 200)
+check("the other device is signed out", other.get("/").status_code in (301, 302), True)
+mine.post("/account", data=dict(current="owner-pass-456", password=OWNER_PW, confirm=OWNER_PW))
+
+
+print("\n=== 22. Accounting: a full cycle posts itself into the books ===")
+import books  # noqa: E402
+import zipfile as _zip  # noqa: E402
+import io as _io  # noqa: E402
+c = signed_in_client()   # earlier password change signed the old client out
+c.post("/admin", data=dict(pin="7788", confirm="7788"), follow_redirects=True)   # unlocks (PIN was reset in 16)
+FY = dict(start="2027-04-01", end="2028-03-31")
+
+
+def acc_id(key):
+    with get_db() as conn:
+        return books.key_ids(conn)[key]
+
+
+def head_id(name):
+    with get_db() as conn:
+        return conn.query_one("SELECT id FROM accounts WHERE name = ?", (name,))["id"]
+
+
 with get_db() as conn:
-    check("deleting a batch returns its raw material", conn.query_one("SELECT stock_qty FROM items WHERE id = ?", (SEED_IDS[0],))["stock_qty"], 9)
-    check("and takes its product back out", conn.query_one("SELECT stock_qty FROM items WHERE id = ?", (MIX,))["stock_qty"], 4.5)
+    keys = books.key_ids(conn)
+check("every system account was created", all(k[0] in keys for k in books.SYSTEM_ACCOUNTS), True)
+check("starter expense heads were seeded", head_id("Rent") > 0, True)
 
-locked2 = app.test_client()
-check("editing a batch needs admin", locked2.get("/production/" + str(b["id"]) + "/edit").status_code, 302)
-check("but recording one does not", locked2.get("/production/new").status_code, 200)
+# items and contacts for this scenario
+for name, kind, rate in (("Mix Dry Fruits", "product", 1500), ("Almond Raw", "raw", 0), ("Cashew Raw", "raw", 0)):
+    c.post("/items/save", data=dict(name=name, hsn="0801", gst_rate="5", unit="kg", kind=kind,
+                                     sale_rate=str(rate), low_stock_qty="0", opening_qty="0", opening_rate="0"))
+MIX, ALM, CSH = item_id("Mix Dry Fruits"), item_id("Almond Raw"), item_id("Cashew Raw")
+c.post("/parties/save", data=dict(name="Jaipur Wholesale", kind="supplier", state_code="27"))
+c.post("/parties/save", data=dict(name="Gift Corp", kind="customer", state_code="27"))
+with get_db() as conn:
+    SUP = conn.query_one("SELECT id FROM parties WHERE name = 'Jaipur Wholesale'")["id"]
+    CUS = conn.query_one("SELECT id FROM parties WHERE name = 'Gift Corp'")["id"]
 
+# A. capital into the bank, opening cash
+r = c.post("/journal/new", data={"j_date": "2027-05-01", "narration": "Capital introduced",
+                                 "acc_id": [str(acc_id("bank")), str(acc_id("capital"))],
+                                 "debit": ["100000", ""], "credit": ["", "100000"],
+                                 "line_party": ["", ""], "memo": ["", ""]}, follow_redirects=True)
+check("a balanced journal entry saves", "Journal entry saved" in r.get_data(as_text=True), True)
+c.post("/journal/new", data={"j_date": "2027-05-01", "narration": "Opening cash",
+                             "acc_id": [str(acc_id("cash")), str(acc_id("opening"))],
+                             "debit": ["5000", ""], "credit": ["", "5000"],
+                             "line_party": ["", ""], "memo": ["", ""]})
+with get_db() as conn:
+    check("journal numbered per financial year",
+          conn.query_one("SELECT j_no FROM journals ORDER BY id LIMIT 1")["j_no"], "JV/2027-28/0001")
+
+# B. raw materials: almonds on credit, cashews by UPI
+post_doc("/purchases/new", dict(bill_date="2027-05-02", bill_no="JW-1", party_id=str(SUP),
+                                payment_mode="Credit (Udhaar)"), [(ALM, 10, 800, 0)])
+post_doc("/purchases/new", dict(bill_date="2027-05-02", bill_no="JW-2", party_id=str(SUP),
+                                payment_mode="UPI"), [(CSH, 5, 1000, 0)])
+
+# C. production: 14 kg of mix from 10 kg almonds + 5 kg cashews, 300 packing paid in cash
+c.post("/production/new", data={"prod_date": "2027-05-03", "product_id": str(MIX), "qty_out": "14",
+                                "other_cost": "300", "other_cost_mode": "Cash",
+                                "raw_id": [str(ALM), str(CSH)], "raw_qty": ["10", "5"]})
+
+# D. sales: 4 kg cash, 2 kg on credit to Gift Corp
+post_doc("/sales/new", dict(invoice_date="2027-05-04", state_code="27", party_name="Walk-in",
+                            payment_mode="Cash"), [(MIX, 4, 1500, 0)])
+post_doc("/sales/new", dict(invoice_date="2027-05-05", party_id=str(CUS),
+                            payment_mode="Credit (Udhaar)"), [(MIX, 2, 1500, 0)])
+
+# E. expenses: rent by bank transfer, packing with 18% GST in cash
+r = c.post("/expenses/new", data=dict(exp_date="2027-05-06", account_id=str(head_id("Rent")),
+                                      amount="10000", gst_rate="0", payment_mode="Bank Transfer",
+                                      party_name="Landlord", description="May rent"), follow_redirects=True)
+check("expense saves and says the books are updated", "books are updated" in r.get_data(as_text=True), True)
+c.post("/expenses/new", data=dict(exp_date="2027-05-06", account_id=str(head_id("Packing Materials")),
+                                  amount="1000", gst_rate="18", payment_mode="Cash", description="Pouches"))
+with get_db() as conn:
+    pk = conn.query_one("SELECT * FROM expenses WHERE description = 'Pouches'")
+    check("expense GST splits CGST 9%", pk["cgst"], 90)
+    check("expense GST splits SGST 9%", pk["sgst"], 90)
+    check("expense total includes GST", pk["total"], 1180)
+
+# F. Gift Corp pays 2000 by UPI; we pay Jaipur Wholesale in full by bank
+c.post("/vouchers/new", data=dict(v_type="receipt", v_date="2027-05-07", account_id=str(acc_id("debtors")),
+                                  party_id=str(CUS), amount="2000", payment_mode="UPI"))
+c.post("/vouchers/new", data=dict(v_type="payment", v_date="2027-05-08", account_id=str(acc_id("creditors")),
+                                  party_id=str(SUP), amount="8400", payment_mode="Bank Transfer"))
+with get_db() as conn:
+    check("receipts numbered RCT/<fy>/0001",
+          conn.query_one("SELECT v_no FROM vouchers WHERE v_type = 'receipt'")["v_no"], "RCT/2027-28/0001")
+
+with get_db() as conn:
+    pl = books.profit_and_loss(conn, FY["start"], FY["end"])
+    check("P&L sales = 6 kg x 1500", pl["sales"]["total"], 9000)
+    # batch cost 8000 + 5000 + 300 = 13300 for 14 kg = 950/kg; 6 kg sold
+    check("P&L direct costs = COGS 5700 + packing 1000", pl["direct"]["total"], 6700)
+    check("gross profit", pl["gross"], 2300)
+    check("indirect expenses = rent", pl["ind_exp"]["total"], 10000)
+    check("net profit (a loss here)", pl["net"], -7700)
+
+    tb = books.trial_balance(conn, FY["start"], FY["end"])
+    check("trial balance balances", tb["tot"]["balanced"], True)
+    check("trial balance closing columns agree", round(tb["tot"]["close_dr"] - tb["tot"]["close_cr"], 2), 0)
+
+    bs = books.balance_sheet(conn, FY["end"])
+    check("balance sheet balances (assets = liabilities + capital)", bs["diff"], 0)
+
+    cash = books.ledger(conn, acc_id("cash"), FY["start"], FY["end"])
+    check("cash moved +5000 -300 +6300 -1180", round(cash["closing"] - cash["opening"], 2), 9820)
+    bank = books.ledger(conn, acc_id("bank"), FY["start"], FY["end"])
+    check("bank moved +100000 -5250 -10000 +2000 -8400", round(bank["closing"] - bank["opening"], 2), 78350)
+    check("running balance ends at the closing balance", bank["rows"][-1]["balance"], bank["closing"])
+
+    o = books.outstanding(conn, FY["end"])
+    gift = [r for r in o["debtors"]["rows"] if r["party_id"] == CUS]
+    check("Gift Corp still owes 3150 - 2000", gift[0]["amount"] if gift else None, 1150)
+    check("Jaipur Wholesale paid in full drops off payables",
+          [r for r in o["creditors"]["rows"] if r["party_id"] == SUP], [])
+
+    inv = books.inventory_check(conn)
+    check("stock in the books equals the stock valuation", inv["ok"], True)
+
+    ent = books.build(conn, start=FY["start"], end=FY["end"])
+    bad = [e["ref"] for e in ent if abs(books.entry_totals(e)[0] - books.entry_totals(e)[1]) > 0.005]
+    check("every generated entry balances on its own", bad, [])
+    sale_e = [e for e in ent if e["kind"] == "sale"][0]
+    names = {a["id"]: a["name"] for a in books.all_accounts(conn)}
+    check("a sale credits Sales and Output GST and debits Cash",
+          sorted({names[l["acc"]] for l in sale_e["lines"]}) ==
+          sorted({"Cash in Hand", "Sales", "Output CGST", "Output SGST", "Cost of Goods Sold",
+                  "Stock - Finished Goods"}), True)
+    prod_e = [e for e in ent if e["kind"] == "production"][0]
+    check("production moves raw material into finished goods",
+          {names[l["acc"]] for l in prod_e["lines"]} >= {"Stock - Raw Materials", "Stock - Finished Goods"}, True)
+
+print("\n=== 23. Edits and deletions flow through every statement ===")
+with get_db() as conn:
+    sid = conn.query_one("SELECT id FROM sales WHERE invoice_date = '2027-05-04'")["id"]
+    rent = conn.query_one("SELECT id FROM expenses WHERE description = 'May rent'")["id"]
+c.post("/sales/" + str(sid) + "/edit",
+       data={"invoice_date": "2027-05-04", "state_code": "27", "party_name": "Walk-in", "payment_mode": "Cash",
+             "item_id": [str(MIX)], "qty": ["5"], "rate": ["1500"], "discount_pct": ["0"]})
+c.post("/expenses/" + str(rent) + "/delete")
+with get_db() as conn:
+    pl = books.profit_and_loss(conn, FY["start"], FY["end"])
+    check("edited sale: sales now 7 kg x 1500", pl["sales"]["total"], 10500)
+    check("edited sale re-costed: COGS 7 x 950 + packing", pl["direct"]["total"], 7650)
+    check("deleted rent no longer in expenses", pl["ind_exp"]["total"], 0)
+    check("net profit follows", pl["net"], 2850)
+    check("still balanced after edits", books.balance_sheet(conn, FY["end"])["diff"], 0)
+    check("inventory still reconciles", books.inventory_check(conn)["ok"], True)
+
+print("\n=== 24. Bad entries are refused ===")
+with get_db() as conn:
+    nj = conn.scalar("SELECT COUNT(*) AS c FROM journals")
+r = c.post("/journal/new", data={"j_date": "2027-05-09", "narration": "lopsided",
+                                 "acc_id": [str(acc_id("cash")), str(acc_id("capital"))],
+                                 "debit": ["100", ""], "credit": ["", "90"],
+                                 "line_party": ["", ""], "memo": ["", ""]}, follow_redirects=True)
+check("an unbalanced journal is refused", "must be equal" in r.get_data(as_text=True), True)
+c.post("/journal/new", data={"j_date": "2027-05-09", "narration": "one-sided", "acc_id": [str(acc_id("cash"))],
+                             "debit": ["100"], "credit": [""], "line_party": [""], "memo": [""]})
+with get_db() as conn:
+    check("nothing was saved", conn.scalar("SELECT COUNT(*) AS c FROM journals"), nj)
+r = c.post("/vouchers/new", data=dict(v_type="receipt", v_date="2027-05-09", account_id=str(acc_id("debtors")),
+                                      amount="10", payment_mode="Cash"), follow_redirects=True)
+check("a receipt against debtors needs a customer", "Say which customer" in r.get_data(as_text=True), True)
+r = c.post("/vouchers/new", data=dict(v_type="payment", v_date="2027-05-09", account_id=str(acc_id("cash")),
+                                      amount="10", payment_mode="Cash"), follow_redirects=True)
+check("cash cannot be paid into cash", "same account" in r.get_data(as_text=True), True)
+r = c.post("/accounts/" + str(acc_id("sales")) + "/toggle", follow_redirects=True)
+check("a system account cannot be archived", "cannot be archived" in r.get_data(as_text=True), True)
+c.post("/accounts/save", data=dict(name="Stall Fees", type="expense", grp="Indirect Expenses", code="5210"))
+check("a custom expense head can be added", head_id("Stall Fees") > 0, True)
+locked2 = signed_in_client()
+locked2.post("/accounts/save", data=dict(id=str(head_id("Stall Fees")), name="Renamed", type="expense",
+                                         grp="Indirect Expenses"))
+with get_db() as conn:
+    check("renaming an account needs admin",
+          conn.scalar("SELECT COUNT(*) AS c FROM accounts WHERE name = 'Renamed'"), 0)
+c.post("/accounts/save", data=dict(id=str(head_id("Rent")), name="Shop Rent", code="5201",
+                                   type="expense", grp="Indirect Expenses"))
+check("an unlocked admin can rename one", head_id("Shop Rent") > 0, True)
+
+print("\n=== 25. Value is conserved when a shelf empties ===")
+c.post("/items/save", data=dict(name="Rounding Test", hsn="", gst_rate="0", unit="kg", kind="product",
+                                 sale_rate="50", low_stock_qty="0", opening_qty="0", opening_rate="0"))
+RT = item_id("Rounding Test")
+post_doc("/purchases/new", dict(bill_date="2027-06-01", bill_no="RT-1", state_code="27"), [(RT, 3, 33.3333, 0)])
+post_doc("/sales/new", dict(invoice_date="2027-06-02", state_code="27", party_name="x"), [(RT, 3, 50, 0)])
+with get_db() as conn:
+    pv = conn.query_one("SELECT taxable FROM purchases WHERE bill_no = 'RT-1'")["taxable"]
+    sv = conn.query_one("SELECT cogs FROM sales WHERE invoice_date = '2027-06-02'")["cogs"]
+    check("selling the whole lot costs exactly what it was bought for", sv, pv)
+    check("and nothing is left behind on the shelf",
+          conn.query_one("SELECT stock_value FROM items WHERE id = ?", (RT,))["stock_value"], 0)
+
+print("\n=== 26. Pages, documents and exports ===")
+with get_db() as conn:
+    eid = conn.query_one("SELECT id FROM expenses LIMIT 1")["id"]
+    vid = conn.query_one("SELECT id FROM vouchers WHERE v_type = 'receipt'")["id"]
+    jid = conn.query_one("SELECT id FROM journals LIMIT 1")["id"]
+for path in ["/accounts", "/ledger?account=" + str(acc_id("bank")) + "&preset=all",
+             "/ledger?account=" + str(acc_id("debtors")) + "&party=id:" + str(CUS) + "&preset=all",
+             "/journal?preset=all", "/journal?preset=all&kind=sale", "/journal/new",
+             "/profit-loss?preset=all", "/balance-sheet", "/balance-sheet?as_at=2027-05-31",
+             "/trial-balance?preset=all", "/outstanding", "/expenses?preset=all", "/expenses/new",
+             "/expenses/" + str(eid), "/expenses/" + str(eid) + "/edit", "/vouchers?preset=all",
+             "/vouchers/new?type=payment", "/vouchers/" + str(vid), "/vouchers/" + str(vid) + "/edit",
+             "/journal/" + str(jid), "/journal/" + str(jid) + "/edit", "/", "/settings", "/production/new",
+             "/reports?preset=all"]:
+    check("page renders " + path, c.get(path).status_code, 200)
+body = c.get("/vouchers/" + str(vid)).get_data(as_text=True)
+check("the receipt prints the amount in words", "Rupees Two Thousand Only" in body, True)
+check("and shows how it hit the books", "How this hits the books" in body, True)
+body = c.get("/").get_data(as_text=True)
+check("dashboard shows the money position", "Cash in hand" in body and "Net profit this month" in body, True)
+body = c.get("/balance-sheet?as_at=2028-03-31").get_data(as_text=True)
+check("balance sheet page says it balances", "Balances</div><div class=\"value\">Yes" in body.replace("\n", ""), True)
+for kind, needle in [("expenses", "Head"), ("vouchers", "Voucher No"), ("journal", "Narration"),
+                     ("trial-balance", "Closing Dr"), ("profit-loss", "Gross profit"),
+                     ("balance-sheet", "ASSETS"), ("outstanding", "Outstanding"), ("accounts", "Group")]:
+    r = c.get("/export/" + kind + ".csv?start=2027-04-01&end=2028-03-31")
+    check(kind + ".csv downloads", r.status_code == 200 and needle in r.get_data(as_text=True), True)
+r = c.get("/export/ledger.csv?account=" + str(acc_id("cash")) + "&preset=all")
+check("ledger.csv downloads", r.status_code == 200 and "Opening balance" in r.get_data(as_text=True), True)
+r = c.get("/export/books.zip?start=2027-04-01&end=2028-03-31")
+z = _zip.ZipFile(_io.BytesIO(r.data))
+names = z.namelist()
+check("books pack is a zip", r.status_code, 200)
+check("books pack holds the statements",
+      all(any(n.startswith(p) for n in names) for p in
+          ("profit-and-loss", "balance-sheet", "trial-balance", "journal", "sales-register", "expenses")), True)
+check("books pack has a readme", "README.txt" in names, True)
+
+print("\n=== 27. Production costs paid on credit become a payable ===")
+c.post("/production/new", data={"prod_date": "2027-06-03", "product_id": str(MIX), "qty_out": "1",
+                                "other_cost": "500", "other_cost_mode": "Credit (Udhaar)",
+                                "raw_id": [str(ALM)], "raw_qty": ["0.001"]})
+with get_db() as conn:
+    ent = [e for e in books.build(conn, start="2027-06-03", end="2027-06-03") if e["kind"] == "production"]
+    names = {a["id"]: a["name"] for a in books.all_accounts(conn)}
+    check("batch costs on credit post to Sundry Creditors",
+          any(names[l["acc"]].startswith("Sundry Creditors") and l["cr"] == 500 for l in ent[0]["lines"]), True)
+    check("books still balance", books.balance_sheet(conn, "2028-03-31")["diff"], 0)
 
 print("\n" + ("=" * 46))
 if FAILS:

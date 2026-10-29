@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_filters.html" as fl %}
+{% import "_statements.html" as st %}
+{% block body %}
+{% set a = lg.account %}
+<div class="page-head">
+  <div><h1>{{ a.name }}</h1><p class="sub">Ledger &middot; {{ start|dmy }} to {{ end|dmy }}{% if party %} &middot; {{ (parties|selectattr('key', 'equalto', party)|first or {}).get('name', '') }}{% endif %}</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='ledger', account=a.id, party=party or None, start=start, end=end) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <button class="btn" type="button" onclick="window.print()">{{ icons.ic('print', 15) }} Print</button>
+  </div>
+</div>
+{{ st.tabs(tabs, 'ledger') }}
+<form method="get" class="card no-print" style="padding:.8rem .9rem;display:flex;gap:.6rem;flex-wrap:wrap;align-items:flex-end">
+  <div class="field" style="margin:0;min-width:240px;flex:1"><label for="account">Account</label>
+    <select id="account" name="account" onchange="this.form.party && (this.form.party.value=''); this.form.submit()">
+      {% set ns = namespace(grp='') %}
+      {% for x in accounts %}
+        {% if x.grp != ns.grp %}{% if ns.grp %}</optgroup>{% endif %}<optgroup label="{{ x.grp }}">{% set ns.grp = x.grp %}{% endif %}
+        <option value="{{ x.id }}" {{ 'selected' if x.id == a.id }}>{{ x.name }}{{ '' if x.active else ' (archived)' }}</option>
+      {% endfor %}{% if ns.grp %}</optgroup>{% endif %}
+    </select></div>
+  {% if parties %}
+  <div class="field" style="margin:0;min-width:200px"><label for="party">Party</label>
+    <select id="party" name="party" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for p in parties %}<option value="{{ p.key }}" {{ 'selected' if p.key == party }}>{{ p.name }}</option>{% endfor %}
+    </select></div>
+  {% endif %}
+  <div class="field" style="margin:0"><label for="start">From</label><input type="date" id="start" name="start" value="{{ start }}"></div>
+  <div class="field" style="margin:0"><label for="end">To</label><input type="date" id="end" name="end" value="{{ end }}"></div>
+  <button class="btn" type="submit">{{ icons.ic('search', 15) }} Show</button>
+</form>
+{{ st.print_head(s, 'Ledger: ' ~ a.name, start|dmy ~ ' to ' ~ end|dmy) }}
+
+<div class="grid g4 no-print" style="margin-bottom:1.1rem">
+  <div class="stat"><div class="label">Opening</div><div class="value">&#8377;{{ lg.opening|inr }}</div></div>
+  <div class="stat"><div class="label">Debits</div><div class="value">&#8377;{{ lg.tot_dr|inr }}</div></div>
+  <div class="stat"><div class="label">Credits</div><div class="value">&#8377;{{ lg.tot_cr|inr }}</div></div>
+  <div class="stat accent"><div class="label">Closing</div><div class="value">&#8377;{{ lg.closing|inr }}</div><div class="note">{{ 'debit' if lg.debit_normal else 'credit' }} balance when positive</div></div>
+</div>
+
+<div class="card">
+  <div class="tw"><table>
+    <thead><tr><th>Date</th><th>Particulars</th><th>Against</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
+    <tbody>
+      <tr><td class="small muted">{{ start|dmy }}</td><td colspan="4"><strong>Opening balance</strong></td><td class="num" style="font-weight:640">{{ st.amt(lg.opening) }}</td></tr>
+      {% for r in lg.rows %}<tr>
+        <td class="small muted">{{ r.date|dmy }}</td>
+        <td><span class="kind {{ r.kind }}">{{ r.kind }}</span> {% if r.link %}<a href="{{ url_for(r.link[0], **r.link[1]) }}">{{ r.ref }}</a>{% else %}{{ r.ref }}{% endif %}
+          <div class="small muted">{{ r.narration }}</div></td>
+        <td class="small muted">{{ r.against }}</td>
+        <td class="num">{{ r.dr|inr if r.dr else '' }}</td><td class="num">{{ r.cr|inr if r.cr else '' }}</td>
+        <td class="num">{{ st.amt(r.balance) }}</td>
+      </tr>{% else %}<tr><td colspan="6" class="empty">No postings to this account in the period.</td></tr>{% endfor %}
+    </tbody>
+    <tfoot><tr><td colspan="3">Closing balance</td><td class="num">{{ lg.tot_dr|inr }}</td><td class="num">{{ lg.tot_cr|inr }}</td><td class="num">{{ st.amt(lg.closing) }}</td></tr></tfoot>
+  </table></div>
+</div>
+{% endblock %}

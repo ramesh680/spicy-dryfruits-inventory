@@ -8,6 +8,7 @@
   <div class="actions">
     <a class="btn" href="{{ url_for('export', kind='gst', start=r.start, end=r.end) }}">{{ icons.ic('down', 15) }} GST summary</a>
     <a class="btn" href="{{ url_for('export', kind='itemwise', start=r.start, end=r.end) }}">{{ icons.ic('down', 15) }} Item profit</a>
+    <a class="btn" href="{{ url_for('profit_loss', start=r.start, end=r.end) }}">{{ icons.ic('book', 15) }} Profit &amp; loss</a>
   </div>
 </div>
 
@@ -16,7 +17,7 @@
 <div class="grid g4" style="margin-bottom:1.1rem">
   <div class="stat accent"><div class="label">Sales (taxable)</div><div class="value">&#8377;{{ r.sale_tot.taxable|inr }}</div><div class="note">{{ r.sales_rows|length }} invoices</div></div>
   <div class="stat"><div class="label">Cost of goods sold</div><div class="value">&#8377;{{ r.cogs|inr }}</div><div class="note">at weighted-average cost</div></div>
-  <div class="stat {{ 'good' if r.gross_profit >= 0 else 'bad' }}"><div class="label">Gross profit</div><div class="value">&#8377;{{ r.gross_profit|inr }}</div><div class="note">{{ r.margin }}% margin</div></div>
+  <div class="stat {{ 'good' if r.gross_profit >= 0 else 'bad' }}"><div class="label">Gross profit</div><div class="value">&#8377;{{ r.gross_profit|inr }}</div><div class="note">{{ r.margin }}% margin{% if r.expenses_total %} &middot; <a href="{{ url_for('profit_loss', start=r.start, end=r.end) }}">&#8377;{{ r.net_profit|inr }} after expenses</a>{% endif %}</div></div>
   <div class="stat {{ 'bad' if r.net_gst > 0 else 'good' }}"><div class="label">{{ 'Net GST payable' if r.net_gst >= 0 else 'Credit carried forward' }}</div>
     <div class="value">&#8377;{{ (r.net_gst if r.net_gst >= 0 else -r.net_gst)|inr }}</div><div class="note">output less input credit</div></div>
 </div>
@@ -83,6 +84,7 @@
     <tbody>
       <tr><td>Output tax collected on sales</td><td class="num">&#8377;{{ r.out_tax|inr }}</td></tr>
       <tr><td>Less: input tax credit on purchases</td><td class="num">&#8377;{{ r.in_tax|inr }}</td></tr>
+      {% if r.exp_tax %}<tr><td>Less: input tax credit on expenses</td><td class="num">&#8377;{{ r.exp_tax|inr }}</td></tr>{% endif %}
     </tbody>
     <tfoot><tr><td>{{ 'Net GST payable' if r.net_gst >= 0 else 'Credit carried forward' }}</td>
       <td class="num" style="font-size:1.08rem">&#8377;{{ (r.net_gst if r.net_gst >= 0 else -r.net_gst)|inr }}</td></tr></tfoot>

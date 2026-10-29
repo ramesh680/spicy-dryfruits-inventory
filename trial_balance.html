@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_filters.html" as fl %}
+{% import "_statements.html" as st %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Trial balance</h1><p class="sub">{{ start|dmy }} to {{ end|dmy }} &middot; every account&rsquo;s opening, movement and closing balance</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='trial-balance', start=start, end=end) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <button class="btn primary" type="button" onclick="window.print()">{{ icons.ic('print', 15) }} Print / PDF</button>
+  </div>
+</div>
+{{ st.tabs(tabs, 'trial_balance') }}
+{{ fl.rangebar('trial_balance', presets, preset, start, end) }}
+{{ st.print_head(s, 'Trial balance', start|dmy ~ ' to ' ~ end|dmy) }}
+
+<div class="card">
+  <div class="okline no-print" style="margin:0 0 .8rem">{% if tb.tot.balanced %}<span class="badge b-green">Balanced</span> Total debits equal total credits.
+    {% else %}<span class="badge b-red">Not balanced</span> Debits and credits differ &mdash; please report this.{% endif %}</div>
+  <div class="tw"><table>
+    <thead><tr><th>Account</th><th>Group</th><th class="num">Opening Dr</th><th class="num">Opening Cr</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Closing Dr</th><th class="num">Closing Cr</th></tr></thead>
+    <tbody>{% for r in tb.rows %}<tr>
+      <td>{% if r.id %}<a href="{{ url_for('ledger', account=r.id, start=start, end=end) }}">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}<div class="small muted">{{ r.code }}</div></td>
+      <td class="small muted">{{ r.grp }}</td>
+      <td class="num">{{ r.open_dr|inr if r.open_dr else '' }}</td><td class="num">{{ r.open_cr|inr if r.open_cr else '' }}</td>
+      <td class="num">{{ r.dr|inr if r.dr else '' }}</td><td class="num">{{ r.cr|inr if r.cr else '' }}</td>
+      <td class="num" style="font-weight:620">{{ r.close_dr|inr if r.close_dr else '' }}</td><td class="num" style="font-weight:620">{{ r.close_cr|inr if r.close_cr else '' }}</td>
+    </tr>{% else %}<tr><td colspan="8" class="empty"><strong>Nothing recorded yet</strong></td></tr>{% endfor %}</tbody>
+    <tfoot><tr><td colspan="2">Total</td>
+      <td class="num">{{ tb.tot.open_dr|inr }}</td><td class="num">{{ tb.tot.open_cr|inr }}</td>
+      <td class="num">{{ tb.tot.dr|inr }}</td><td class="num">{{ tb.tot.cr|inr }}</td>
+      <td class="num">{{ tb.tot.close_dr|inr }}</td><td class="num">{{ tb.tot.close_cr|inr }}</td></tr></tfoot>
+  </table></div>
+  <p class="note-line">Income and expenses from before {{ start|dmy }} are carried in as one &ldquo;profit &amp; loss brought forward&rdquo; line, the way books roll into a new year.</p>
+</div>
+{% endblock %}

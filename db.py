@@ -6,6 +6,8 @@ Otherwise a SQLite file is used (path from SQLITE_PATH, default ./data/inventory
 import os
 import re
 import sqlite3
+import threading
+import time
 from contextlib import contextmanager
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
@@ -31,15 +33,49 @@ def _to_pg(sql):
     return "".join(out)
 
 
+def _is_disconnect(exc):
+    return IS_PG and isinstance(exc, (psycopg2.OperationalError, psycopg2.InterfaceError))
+
+
 class Cursor:
     """Thin cursor wrapper so the rest of the app can always use '?' placeholders
     and always get dict-like rows back."""
 
-    def __init__(self, cur):
+    def __init__(self, cur, conn=None):
         self._cur = cur
+        self._conn = conn
+
+    def _run(self, fn):
+        try:
+            fn(self._cur)
+        except Exception as exc:
+            # A pooled connection the server dropped while it sat idle (Neon
+            # suspends its compute) fails on its first statement. Nothing has
+            # run in this transaction yet, so reconnecting and retrying is safe.
+            if not (self._conn is not None and self._conn.reused and _is_disconnect(exc)):
+                raise
+            self._conn.reconnect()
+            self._cur = self._conn.raw_cursor()
+            fn(self._cur)
+        if self._conn is not None:
+            self._conn.reused = False
 
     def execute(self, sql, params=()):
-        self._cur.execute(_to_pg(sql) if IS_PG else sql, params)
+        q = _to_pg(sql) if IS_PG else sql
+        self._run(lambda cur: cur.execute(q, params))
+        return self
+
+    def executemany(self, sql, seq):
+        seq = list(seq)
+        if not seq:
+            return self
+        if IS_PG:
+            # one round trip per page instead of one per row - matters on a
+            # remote database such as Neon
+            q = _to_pg(sql)
+            self._run(lambda cur: psycopg2.extras.execute_batch(cur, q, seq, page_size=500))
+        else:
+            self._run(lambda cur: cur.executemany(sql, seq))
         return self
 
     def fetchone(self):
@@ -54,16 +90,31 @@ class Cursor:
 
 
 class Conn:
-    def __init__(self, raw):
+    def __init__(self, raw, reused=False):
         self.raw = raw
+        self.reused = reused    # came from the idle pool and is not yet proven alive
+
+    def raw_cursor(self):
+        if IS_PG:
+            return self.raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        return self.raw.cursor()
 
     def cursor(self):
-        if IS_PG:
-            return Cursor(self.raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
-        return Cursor(self.raw.cursor())
+        return Cursor(self.raw_cursor(), self)
+
+    def reconnect(self):
+        try:
+            self.raw.close()
+        except Exception:
+            pass
+        self.raw = psycopg2.connect(_pg_url())
+        self.reused = False
 
     def execute(self, sql, params=()):
         return self.cursor().execute(sql, params)
+
+    def executemany(self, sql, seq):
+        return self.cursor().executemany(sql, seq)
 
     def query(self, sql, params=()):
         rows = self.execute(sql, params).fetchall()
@@ -102,13 +153,65 @@ class Conn:
         self.raw.close()
 
 
+# ---------------------------------------------------------------- pooling
+# Opening a fresh TLS connection to a hosted Postgres (Neon) costs 100-300 ms,
+# and every page used to open two. A small per-process pool keeps connections
+# warm. Neon closes idle connections when its compute sleeps; such a connection
+# fails on its first statement and is replaced there and then (see Cursor._run),
+# so no request pays for a liveness ping.
+POOL_MAX = int(os.environ.get("DB_POOL_MAX", "4"))
+IDLE_SECONDS = 600     # close a connection left idle longer than this
+_idle = []          # [(raw_connection, last_used_time)]
+_idle_pid = None
+_idle_lock = threading.Lock()
+
+
+def _pg_url():
+    url = DATABASE_URL
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+def _checkout():
+    """A warm connection from this process's idle list, or a new one. A worker
+    forked from another process never reuses its parent's sockets."""
+    global _idle_pid
+    while True:
+        with _idle_lock:
+            if _idle_pid != os.getpid():
+                _idle[:] = []
+                _idle_pid = os.getpid()
+            item = _idle.pop() if _idle else None
+        if item is None:
+            return psycopg2.connect(_pg_url()), False
+        raw, last_used = item
+        if not raw.closed and time.time() - last_used < IDLE_SECONDS:
+            return raw, True
+        try:
+            raw.close()
+        except Exception:
+            pass
+
+
+def _checkin(raw, broken=False):
+    try:
+        if broken or raw.closed:
+            raw.close()
+            return
+        raw.rollback()      # never hand on an open transaction
+        with _idle_lock:
+            if _idle_pid == os.getpid() and len(_idle) < POOL_MAX:
+                _idle.append((raw, time.time()))
+                return
+        raw.close()
+    except Exception:
+        pass
+
+
 def connect():
     if IS_PG:
-        url = DATABASE_URL
-        if url.startswith("postgres://"):
-            url = "postgresql://" + url[len("postgres://"):]
-        raw = psycopg2.connect(url)
-        return Conn(raw)
+        return Conn(psycopg2.connect(_pg_url()))
     os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
     raw = sqlite3.connect(SQLITE_PATH)
     raw.row_factory = sqlite3.Row
@@ -118,15 +221,32 @@ def connect():
 
 @contextmanager
 def get_db():
-    conn = connect()
+    if not IS_PG:
+        conn = connect()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return
+    raw, reused = _checkout()
+    conn = Conn(raw, reused)
+    broken = False
     try:
         yield conn
         conn.commit()
-    except Exception:
-        conn.rollback()
+    except Exception as exc:
+        broken = isinstance(exc, (psycopg2.OperationalError, psycopg2.InterfaceError))
+        try:
+            conn.rollback()
+        except Exception:
+            broken = True
         raise
     finally:
-        conn.close()
+        _checkin(conn.raw, broken)
 
 
 PK = "SERIAL PRIMARY KEY" if IS_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
@@ -296,6 +416,83 @@ SCHEMA = [
         last_login TEXT DEFAULT '',
         created_at TEXT DEFAULT ''
     )""",
+    # ---- accounting
+    # Chart of accounts. sys_key marks the accounts the app posts to on its own
+    # (cash, bank, debtors, sales, GST...); those can be renamed, not removed.
+    """CREATE TABLE IF NOT EXISTS accounts (
+        id {PK},
+        code TEXT DEFAULT '',
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        grp TEXT NOT NULL DEFAULT '',
+        sys_key TEXT DEFAULT '',
+        active INTEGER NOT NULL DEFAULT 1,
+        notes TEXT DEFAULT '',
+        created_at TEXT DEFAULT ''
+    )""",
+    # Day-to-day running costs: rent, packing, delivery, salaries...
+    """CREATE TABLE IF NOT EXISTS expenses (
+        id {PK},
+        exp_date TEXT NOT NULL,
+        account_id INTEGER NOT NULL,
+        party_id INTEGER,
+        party_name TEXT DEFAULT '',
+        ref_no TEXT DEFAULT '',
+        description TEXT DEFAULT '',
+        amount {NUM} NOT NULL DEFAULT 0,
+        gst_rate {NUM} NOT NULL DEFAULT 0,
+        interstate INTEGER NOT NULL DEFAULT 0,
+        cgst {NUM} NOT NULL DEFAULT 0,
+        sgst {NUM} NOT NULL DEFAULT 0,
+        igst {NUM} NOT NULL DEFAULT 0,
+        total {NUM} NOT NULL DEFAULT 0,
+        payment_mode TEXT DEFAULT 'Cash',
+        created_at TEXT DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        edit_count INTEGER NOT NULL DEFAULT 0
+    )""",
+    # Money received or paid that is not a sale or purchase: a customer settling
+    # udhaar, paying a supplier, capital put in, a loan, GST paid...
+    """CREATE TABLE IF NOT EXISTS vouchers (
+        id {PK},
+        v_type TEXT NOT NULL,
+        v_no TEXT DEFAULT '',
+        v_date TEXT NOT NULL,
+        account_id INTEGER NOT NULL,
+        party_id INTEGER,
+        party_name TEXT DEFAULT '',
+        amount {NUM} NOT NULL DEFAULT 0,
+        payment_mode TEXT DEFAULT 'Cash',
+        ref_no TEXT DEFAULT '',
+        notes TEXT DEFAULT '',
+        created_at TEXT DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        edit_count INTEGER NOT NULL DEFAULT 0
+    )""",
+    # Hand-written double entries, for anything the documents above do not cover.
+    """CREATE TABLE IF NOT EXISTS journals (
+        id {PK},
+        j_no TEXT DEFAULT '',
+        j_date TEXT NOT NULL,
+        narration TEXT DEFAULT '',
+        created_at TEXT DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        edit_count INTEGER NOT NULL DEFAULT 0
+    )""",
+    """CREATE TABLE IF NOT EXISTS journal_lines (
+        id {PK},
+        journal_id INTEGER NOT NULL,
+        account_id INTEGER NOT NULL,
+        party_id INTEGER,
+        party_name TEXT DEFAULT '',
+        debit {NUM} NOT NULL DEFAULT 0,
+        credit {NUM} NOT NULL DEFAULT 0,
+        memo TEXT DEFAULT ''
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_jl_journal ON journal_lines(journal_id)",
+    "CREATE INDEX IF NOT EXISTS idx_j_date ON journals(j_date)",
+    "CREATE INDEX IF NOT EXISTS idx_e_date ON expenses(exp_date)",
+    "CREATE INDEX IF NOT EXISTS idx_v_date ON vouchers(v_date)",
     "CREATE INDEX IF NOT EXISTS idx_pl_purchase ON purchase_lines(purchase_id)",
     "CREATE INDEX IF NOT EXISTS idx_prl_prod ON production_lines(production_id)",
     "CREATE INDEX IF NOT EXISTS idx_rl_product ON recipe_lines(product_id)",
@@ -344,7 +541,18 @@ MIGRATIONS = [
     ("purchases", "edit_count", "INTEGER NOT NULL DEFAULT 0"),
     # 'product' = something you sell; 'raw' = an ingredient you buy and use up
     ("items", "kind", "TEXT NOT NULL DEFAULT 'product'"),
+    # value that actually left stock with each sale line (cost_rate x qty, except
+    # the line that empties a shelf takes whatever value was left on it)
+    ("sale_lines", "cost", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+    # how a production batch's packing/labour costs were paid
+    ("productions", "other_cost_mode", "TEXT DEFAULT 'Cash'"),
+    # date the opening stock is booked on in the accounts
+    ("settings", "books_start", "TEXT DEFAULT ''"),
 ]
+
+# Columns whose values are computed by the stock replay; adding one means the
+# replay must run once so old rows are filled in.
+NEEDS_REBUILD = {("sale_lines", "cost")}
 
 
 def existing_columns(conn, table):
@@ -358,7 +566,9 @@ def existing_columns(conn, table):
 
 
 def migrate(conn):
-    """Add any column a newer version expects but an older database lacks."""
+    """Add any column a newer version expects but an older database lacks.
+    Returns the (table, column) pairs that were added."""
+    added = []
     by_table = {}
     for table, col, ddl in MIGRATIONS:
         by_table.setdefault(table, []).append((col, ddl))
@@ -367,13 +577,19 @@ def migrate(conn):
         for col, ddl in cols:
             if col not in have:
                 conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, col, ddl))
+                added.append((table, col))
+    return added
 
 
 def init_db():
+    """Create and upgrade the schema. Returns True when the stock replay has to
+    run once to fill in a newly added computed column."""
     with get_db() as conn:
+        if IS_PG:   # gunicorn workers boot at the same moment; migrate one at a time
+            conn.execute("SELECT pg_advisory_xact_lock(724100)")
         for stmt in SCHEMA:
             conn.execute(stmt.format(PK=PK, NUM=NUM))
-        migrate(conn)
+        added = migrate(conn)
         row = conn.query_one("SELECT id FROM settings WHERE id = 1")
         if not row:
             conn.execute("INSERT INTO settings (id) VALUES (1)")
@@ -396,3 +612,4 @@ def init_db():
             conn.execute(UNIQUE_INVOICE_INDEX)
     except Exception:
         pass
+    return any(a in NEEDS_REBUILD for a in added)

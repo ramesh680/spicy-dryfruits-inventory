@@ -31,6 +31,19 @@
     </div>
     <div class="field"><label for="bank_details">Bank details (printed on invoices)</label><textarea id="bank_details" name="bank_details" placeholder="Bank name, A/c no., IFSC, UPI ID">{{ s.bank_details }}</textarea></div>
     <div class="field"><label for="terms">Terms &amp; conditions</label><textarea id="terms" name="terms" placeholder="Goods once sold will not be taken back...">{{ s.terms }}</textarea></div>
+  </div>
+
+  <div class="card">
+    <h2>Accounts</h2>
+    <p class="sub">Every sale, purchase, batch, expense and receipt posts to the books on its own. These set where the books begin.</p>
+    <div class="row r2">
+      <div class="field"><label for="books_start">Books start date</label>
+        <input type="date" id="books_start" name="books_start" value="{{ s.books_start or '' }}">
+        <p class="small muted" style="margin:.3rem 0 0">The opening stock entered on Items is booked on this date. Leave blank to use the date of your first entry.</p></div>
+      <div class="field"><label>Opening cash, bank and capital</label>
+        <p class="small muted" style="margin:.2rem 0 .5rem">Money the business already had when you started, or that you put in &mdash; enter it once as a journal entry so the cash and bank ledgers start from the right figure.</p>
+        <a class="btn sm" href="{{ url_for('journal_new') }}">New journal entry</a></div>
+    </div>
     <button class="btn primary" type="submit">Save settings</button>
   </div>
 </form>
