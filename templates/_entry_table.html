@@ -1,0 +1,18 @@
+{# The double entry a document produced - shown on its page so it is clear how it hit the books. #}
+{% macro entry(e) %}
+{% if e %}
+<div class="card no-print">
+  <h2>How this hits the books</h2>
+  <p class="sub">Posted automatically. Change the document and this changes with it.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Account</th><th>Party</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+    <tbody>{% for l in e.lines %}<tr>
+      <td class="{{ 'cr-name' if l.cr and not l.dr }}"><a href="{{ url_for('ledger', account=l.acc) }}">{{ l.name }}</a></td>
+      <td class="small muted">{{ l.party_name or '' }}</td>
+      <td class="num">{{ l.dr|inr if l.dr else '' }}</td><td class="num">{{ l.cr|inr if l.cr else '' }}</td>
+    </tr>{% endfor %}</tbody>
+    <tfoot><tr><td colspan="2">Total</td><td class="num">{{ e.lines|sum(attribute='dr')|inr }}</td><td class="num">{{ e.lines|sum(attribute='cr')|inr }}</td></tr></tfoot>
+  </table></div>
+</div>
+{% endif %}
+{% endmacro %}
