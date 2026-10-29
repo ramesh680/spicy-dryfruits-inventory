@@ -8,6 +8,7 @@
     <p class="sub">{{ today|dmy }} &middot; all figures in &#8377;</p>
   </div>
   <div class="actions">
+    <a class="btn" href="{{ url_for('expense_new') }}">{{ icons.ic('wallet', 15) }} Record expense</a>
     <a class="btn" href="{{ url_for('purchase_new') }}">{{ icons.ic('cart', 15) }} Record purchase</a>
     <a class="btn primary" href="{{ url_for('quick') }}">{{ icons.ic('bolt', 15) }} Quick sale</a>
   </div>
@@ -37,6 +38,27 @@
       {% else %}all items above reorder level{% endif %}
     </div>
   </div>
+</div>
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <a class="stat" href="{{ url_for('ledger', account=None) }}" style="color:inherit;text-decoration:none">
+    <div class="label">Cash in hand</div>
+    <div class="value" style="{{ 'color:var(--red)' if acc.cash < 0 }}">&#8377;{{ acc.cash|inr }}</div>
+    <div class="note">Bank &#8377;{{ acc.bank|inr }}</div>
+  </a>
+  <a class="stat" href="{{ url_for('outstanding') }}" style="color:inherit;text-decoration:none">
+    <div class="label">To collect (udhaar)</div><div class="value">&#8377;{{ acc.receivable|inr }}</div>
+    <div class="note">you owe suppliers &#8377;{{ acc.payable|inr }}</div>
+  </a>
+  <a class="stat {{ 'good' if acc.month_net >= 0 else 'bad' }}" href="{{ url_for('profit_loss', preset='month') }}" style="text-decoration:none">
+    <div class="label">Net profit this month</div><div class="value">&#8377;{{ acc.month_net|inr }}</div>
+    <div class="note">after &#8377;{{ acc.month_expenses|inr }} of expenses</div>
+  </a>
+  <a class="stat" href="{{ url_for('balance_sheet') }}" style="color:inherit;text-decoration:none">
+    <div class="label">{{ 'GST payable' if acc.gst_net >= 0 else 'GST credit in hand' }}</div>
+    <div class="value">&#8377;{{ (acc.gst_net if acc.gst_net >= 0 else -acc.gst_net)|inr }}</div>
+    <div class="note">all-time, after GST already paid</div>
+  </a>
 </div>
 
 <div class="card">

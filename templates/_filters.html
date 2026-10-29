@@ -1,13 +1,14 @@
 {% import "_icons.html" as icons %}
-{% macro rangebar(endpoint, presets, preset, start, end, q=None, placeholder='Search') %}
-<div class="card" style="padding:.8rem .9rem">
+{% macro rangebar(endpoint, presets, preset, start, end, q=None, placeholder='Search', extra={}) %}
+<div class="card no-print" style="padding:.8rem .9rem">
   <div style="display:flex;gap:.7rem;flex-wrap:wrap;align-items:flex-end">
     <div class="seg" role="group" aria-label="Date range">
       {% for key, label in presets %}
-      <a href="{{ url_for(endpoint, preset=key, q=q or None) }}" class="{{ 'on' if preset == key }}">{{ label }}</a>
+      <a href="{{ url_for(endpoint, preset=key, q=q or None, **extra) }}" class="{{ 'on' if preset == key }}">{{ label }}</a>
       {% endfor %}
     </div>
     <form method="get" style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:flex-end;flex:1;min-width:260px">
+      {% for k, v in extra.items() %}{% if v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
       {% if q is not none %}
       <div class="field" style="margin:0;flex:1;min-width:170px">
         <label for="q">Search</label>

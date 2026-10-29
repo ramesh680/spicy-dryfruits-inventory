@@ -17,7 +17,7 @@
     } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
   })();
 </script>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=3">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=4">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%8C%B0</text></svg>">
 </head>
 <body>
@@ -47,6 +47,14 @@
     <a class="nav {{ 'on' if ep in ('production','production_view') }}" href="{{ url_for('production') }}">{{ icons.ic('list') }} Production</a>
     <a class="nav {{ 'on' if ep in ('raw_materials','recipe_edit') }}" href="{{ url_for('raw_materials') }}">{{ icons.ic('jar') }} Raw materials</a>
     <a class="nav {{ 'on' if ep=='reports' }}" href="{{ url_for('reports') }}">{{ icons.ic('chart') }} Reports</a>
+
+    <div class="nav-label">Accounts</div>
+    <a class="nav {{ 'on' if ep in ('expenses','expense_new','expense_edit','expense_view') }}" href="{{ url_for('expenses') }}">{{ icons.ic('wallet') }} Expenses</a>
+    <a class="nav {{ 'on' if ep in ('vouchers','voucher_new','voucher_edit','voucher_view') }}" href="{{ url_for('vouchers') }}">{{ icons.ic('swap') }} Receipts &amp; payments</a>
+    <a class="nav {{ 'on' if ep=='outstanding' }}" href="{{ url_for('outstanding') }}">{{ icons.ic('users') }} Outstanding</a>
+    <a class="nav {{ 'on' if ep in ('profit_loss','balance_sheet','trial_balance') }}" href="{{ url_for('profit_loss') }}">{{ icons.ic('scale') }} P&amp;L &amp; balance sheet</a>
+    <a class="nav {{ 'on' if ep in ('day_book','journal_new','journal_edit','journal_view','ledger') }}" href="{{ url_for('day_book') }}">{{ icons.ic('book') }} Journal &amp; ledgers</a>
+    <a class="nav {{ 'on' if ep=='accounts' }}" href="{{ url_for('accounts') }}">{{ icons.ic('list') }} Chart of accounts</a>
 
     <div class="nav-label">Setup</div>
     <a class="nav {{ 'on' if ep=='items' }}" href="{{ url_for('items') }}">{{ icons.ic('box') }} Items</a>
@@ -93,7 +101,7 @@
   <a href="{{ url_for('quick') }}" class="{{ 'on' if ep=='quick' }}">{{ icons.ic('bolt', 20) }}Sell</a>
   <a href="{{ url_for('purchase_new') }}" class="{{ 'on' if ep=='purchase_new' }}">{{ icons.ic('cart', 20) }}Buy</a>
   <a href="{{ url_for('stock') }}" class="{{ 'on' if ep=='stock' }}">{{ icons.ic('box', 20) }}Stock</a>
-  <a href="{{ url_for('reports') }}" class="{{ 'on' if ep in ('reports','sales','purchases','items','parties','settings','production','production_view','production_new','production_edit','raw_materials','recipe_edit','users','account') }}">{{ icons.ic('chart', 20) }}More</a>
+  <a href="{{ url_for('reports') }}" class="{{ 'on' if ep in ('reports','sales','purchases','items','parties','settings','production','production_view','production_new','production_edit','raw_materials','recipe_edit','users','account','expenses','expense_new','expense_edit','expense_view','vouchers','voucher_new','voucher_edit','voucher_view','outstanding','profit_loss','balance_sheet','trial_balance','day_book','journal_new','journal_edit','journal_view','ledger','accounts') }}">{{ icons.ic('chart', 20) }}More</a>
 </nav>
 
 <div class="tip" id="tip" role="status" aria-live="polite"></div>
