@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_filters.html" as fl %}
+{% import "_statements.html" as st %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Profit &amp; loss</h1><p class="sub">{{ start|dmy }} to {{ end|dmy }} &middot; from every sale, batch and expense in the period</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='profit-loss', start=start, end=end) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <a class="btn" href="{{ url_for('export_books', start=start, end=end) }}">{{ icons.ic('down', 15) }} Full books pack (.zip)</a>
+    <button class="btn primary" type="button" onclick="window.print()">{{ icons.ic('print', 15) }} Print / PDF</button>
+  </div>
+</div>
+{{ st.tabs(tabs, 'profit_loss') }}
+{{ fl.rangebar('profit_loss', presets, preset, start, end) }}
+{{ st.print_head(s, 'Profit & loss account', 'For the period ' ~ start|dmy ~ ' to ' ~ end|dmy) }}
+
+<div class="grid g4 no-print" style="margin-bottom:1.1rem">
+  <div class="stat accent"><div class="label">Sales</div><div class="value">&#8377;{{ pl.sales.total|inr }}</div><div class="note">before GST</div></div>
+  <div class="stat {{ 'good' if pl.gross >= 0 else 'bad' }}"><div class="label">Gross profit</div><div class="value">&#8377;{{ pl.gross|inr }}</div><div class="note">{{ pl.gross_margin }}% of sales</div></div>
+  <div class="stat"><div class="label">Expenses</div><div class="value">&#8377;{{ pl.ind_exp.total|inr }}</div><div class="note">running costs</div></div>
+  <div class="stat {{ 'good' if pl.net >= 0 else 'bad' }}"><div class="label">{{ 'Net profit' if pl.net >= 0 else 'Net loss' }}</div><div class="value">&#8377;{{ (pl.net if pl.net >= 0 else -pl.net)|inr }}</div><div class="note">{{ pl.net_margin }}% of sales</div></div>
+</div>
+
+<div class="card">
+  <div class="tw"><table class="stmt">
+    <thead><tr><th>Particulars</th><th class="num">&#8377;</th><th class="num">&#8377;</th></tr></thead>
+    <tbody>
+      <tr class="grp"><td colspan="3">Trading</td></tr>
+      {% for r in pl.sales.rows %}<tr><td class="lvl1"><a href="{{ url_for('ledger', account=r.id, start=start, end=end) }}">{{ r.name }}</a></td><td class="num">{{ st.amt(r.amount) }}</td><td></td></tr>{% endfor %}
+      <tr class="sub"><td>Revenue from sales</td><td></td><td class="num">{{ st.amt(pl.sales.total) }}</td></tr>
+      {% for r in pl.direct.rows %}<tr><td class="lvl1">Less: <a href="{{ url_for('ledger', account=r.id, start=start, end=end) }}">{{ r.name }}</a></td><td class="num">{{ st.amt(r.amount) }}</td><td></td></tr>{% endfor %}
+      <tr class="sub"><td>Direct costs</td><td></td><td class="num">{{ st.amt(-pl.direct.total) }}</td></tr>
+      <tr class="big"><td>Gross profit</td><td></td><td class="num {{ 'pos' if pl.gross >= 0 else 'neg' }}">{{ st.amt(pl.gross) }}</td></tr>
+
+      {% if pl.ind_inc.rows %}
+      <tr class="grp"><td colspan="3">Other income</td></tr>
+      {% for r in pl.ind_inc.rows %}<tr><td class="lvl1"><a href="{{ url_for('ledger', account=r.id, start=start, end=end) }}">{{ r.name }}</a></td><td class="num">{{ st.amt(r.amount) }}</td><td></td></tr>{% endfor %}
+      <tr class="sub"><td>Total other income</td><td></td><td class="num">{{ st.amt(pl.ind_inc.total) }}</td></tr>
+      {% endif %}
+
+      <tr class="grp"><td colspan="3">Indirect expenses</td></tr>
+      {% for r in pl.ind_exp.rows %}<tr><td class="lvl1"><a href="{{ url_for('ledger', account=r.id, start=start, end=end) }}">{{ r.name }}</a></td><td class="num">{{ st.amt(r.amount) }}</td><td></td></tr>
+      {% else %}<tr><td class="lvl1 muted" colspan="3">No expenses recorded in this period &mdash; <a href="{{ url_for('expense_new') }}">record one</a>.</td></tr>{% endfor %}
+      <tr class="sub"><td>Total indirect expenses</td><td></td><td class="num">{{ st.amt(-pl.ind_exp.total) }}</td></tr>
+
+      <tr class="big"><td>{{ 'Net profit' if pl.net >= 0 else 'Net loss' }} for the period</td><td></td><td class="num {{ 'pos' if pl.net >= 0 else 'neg' }}">{{ st.amt(pl.net) }}</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note-line">Cost of goods sold is the weighted-average cost of exactly what was sold, so stock bought but not yet sold stays on the balance sheet rather than reducing profit. Amounts exclude GST, which is a pass-through to the government. Bracketed figures are negative.</p>
+</div>
+{% endblock %}

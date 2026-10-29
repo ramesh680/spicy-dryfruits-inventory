@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_filters.html" as fl %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Receipts &amp; payments</h1><p class="sub">{{ start|dmy }} to {{ end|dmy }} &middot; customers settling udhaar, paying suppliers, capital, loans, GST paid&hellip;</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='vouchers', start=start, end=end) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <a class="btn" href="{{ url_for('voucher_new', type='payment') }}">{{ icons.ic('plus', 15) }} Payment</a>
+    <a class="btn primary" href="{{ url_for('voucher_new', type='receipt') }}">{{ icons.ic('plus', 15) }} Receipt</a>
+  </div>
+</div>
+
+<div class="seg no-print" style="margin-bottom:.8rem">
+  <a href="{{ url_for('vouchers', preset=preset or None, start=None if preset else start, end=None if preset else end) }}" class="{{ 'on' if not vtype }}">All</a>
+  <a href="{{ url_for('vouchers', type='receipt', preset=preset or None, start=None if preset else start, end=None if preset else end) }}" class="{{ 'on' if vtype == 'receipt' }}">Receipts</a>
+  <a href="{{ url_for('vouchers', type='payment', preset=preset or None, start=None if preset else start, end=None if preset else end) }}" class="{{ 'on' if vtype == 'payment' }}">Payments</a>
+</div>
+{{ fl.rangebar('vouchers', presets, preset, start, end, q, 'Party, voucher no., account or note', {'type': vtype}) }}
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <div class="stat good"><div class="label">Received</div><div class="value">&#8377;{{ received|inr }}</div></div>
+  <div class="stat bad"><div class="label">Paid</div><div class="value">&#8377;{{ paid|inr }}</div></div>
+  <div class="stat"><div class="label">Net</div><div class="value">&#8377;{{ (received - paid)|inr }}</div></div>
+  <div class="stat"><div class="label">Who owes what</div><div class="value" style="font-size:1rem;margin-top:.55rem"><a href="{{ url_for('outstanding') }}">Outstanding balances &rarr;</a></div></div>
+</div>
+
+<div class="card">
+  <div class="tw"><table>
+    <thead><tr><th>Voucher</th><th>Date</th><th>Party / account</th><th>Mode</th><th class="num">Received</th><th class="num">Paid</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}<tr>
+      <td><a href="{{ url_for('voucher_view', vid=r.id) }}">{{ r.v_no }}</a> <span class="kind {{ r.v_type }}">{{ r.v_type }}</span></td>
+      <td class="small muted">{{ r.v_date|dmy }}</td>
+      <td>{{ r.party_name or r.account_name }}<div class="small muted">{{ r.account_name }}{% if r.notes %} &middot; {{ r.notes }}{% endif %}</div></td>
+      <td class="small">{{ r.payment_mode }}</td>
+      <td class="num" style="color:var(--green)">{{ r.amount|inr if r.v_type == 'receipt' else '' }}</td>
+      <td class="num" style="color:var(--red)">{{ r.amount|inr if r.v_type == 'payment' else '' }}</td>
+      <td class="num">{% if is_admin %}<a class="btn sm" href="{{ url_for('voucher_edit', vid=r.id) }}">Edit</a>{% endif %}</td>
+    </tr>{% else %}<tr><td colspan="7" class="empty"><strong>Nothing in this period</strong>
+      When a customer pays off their udhaar, or you pay a supplier you bought from on credit, record it here.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_entry_table.html" as et %}
+{% block body %}
+{% set receipt = doc.v_type == 'receipt' %}
+<div class="page-head">
+  <div><h1>{{ 'Receipt' if receipt else 'Payment' }} {{ doc.v_no }}</h1>
+    <p class="sub">{{ doc.v_date|dmy }} &middot; {{ doc.party_name or doc.account_name }} &middot; {{ doc.payment_mode }}</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('vouchers') }}">Register</a>
+    <button class="btn primary" type="button" onclick="window.print()">{{ icons.ic('print', 15) }} Print</button>
+    {% if is_admin %}<a class="btn" href="{{ url_for('voucher_edit', vid=doc.id) }}">Edit</a>
+    {% else %}<a class="btn" href="{{ url_for('admin', next=request.full_path) }}">Unlock to edit</a>{% endif %}
+  </div>
+</div>
+
+<div class="voucher">
+  <div class="inv-title">{{ 'Payment receipt' if receipt else 'Payment voucher' }}</div>
+  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;border-bottom:2px solid #16181d;padding-bottom:.8rem;margin-bottom:1.1rem">
+    <div><h1>{{ s.business_name }}</h1>
+      <div class="small" style="color:#5c6470">{{ s.address|replace('\n', ', ') }}</div>
+      {% if s.gstin %}<div class="small" style="color:#5c6470">GSTIN {{ s.gstin }}</div>{% endif %}
+      {% if s.phone %}<div class="small" style="color:#5c6470">{{ s.phone }}</div>{% endif %}</div>
+    <div class="small" style="text-align:right">No. <strong>{{ doc.v_no }}</strong><br>Date {{ doc.v_date|dmy }}</div>
+  </div>
+  <p style="line-height:1.9;margin:0 0 1rem">
+    {% if receipt %}Received with thanks from <strong>{{ doc.party_name or doc.account_name }}</strong>
+    {% else %}Paid to <strong>{{ doc.party_name or doc.account_name }}</strong>{% endif %}
+    {% if party and party.gstin %}(GSTIN {{ party.gstin }}){% endif %}
+    the sum of <strong>{{ words }}</strong>
+    by <strong>{{ doc.payment_mode }}</strong>{% if doc.ref_no %} (ref {{ doc.ref_no }}){% endif %}
+    {% if doc.notes %} towards {{ doc.notes }}{% else %} towards {{ doc.account_name }}{% endif %}.
+  </p>
+  <div class="amount-box">&#8377; {{ doc.amount|inr }}</div>
+  <div style="display:flex;justify-content:space-between;margin-top:3rem;font-size:.8rem;color:#5c6470">
+    <div>{{ 'Customer' if receipt else 'Receiver' }}&rsquo;s signature</div><div>For {{ s.business_name }}<br><br>Authorised signatory</div>
+  </div>
+</div>
+<div style="height:1.1rem"></div>
+{{ et.entry(entry) }}
+{% endblock %}
