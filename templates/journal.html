@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_filters.html" as fl %}
+{% import "_statements.html" as st %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Journal</h1><p class="sub">{{ start|dmy }} to {{ end|dmy }} &middot; every transaction as a double entry, posted automatically from the registers</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='journal', start=start, end=end) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <button class="btn" type="button" onclick="window.print()">{{ icons.ic('print', 15) }} Print</button>
+    <a class="btn primary" href="{{ url_for('journal_new') }}">{{ icons.ic('plus', 15) }} Journal entry</a>
+  </div>
+</div>
+{{ st.tabs(tabs, 'day_book') }}
+{{ st.print_head(s, 'Journal', start|dmy ~ ' to ' ~ end|dmy) }}
+
+<div class="seg no-print" style="margin-bottom:.8rem">
+  {% for k, label in [('', 'All'), ('sale', 'Sales'), ('purchase', 'Purchases'), ('production', 'Production'), ('expense', 'Expenses'), ('receipt', 'Receipts'), ('payment', 'Payments'), ('journal', 'Journal entries'), ('opening', 'Opening')] %}
+  <a href="{{ url_for('day_book', kind=k or None, preset=preset or None, start=None if preset else start, end=None if preset else end, q=q or None) }}" class="{{ 'on' if kind == k }}">{{ label }}</a>
+  {% endfor %}
+</div>
+{{ fl.rangebar('day_book', presets, preset, start, end, q, 'Ref, narration or account', {'kind': kind}) }}
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <div class="stat"><div class="label">Entries</div><div class="value">{{ count }}</div></div>
+  <div class="stat"><div class="label">Total debits</div><div class="value">&#8377;{{ dr|inr }}</div></div>
+  <div class="stat"><div class="label">Total credits</div><div class="value">&#8377;{{ cr|inr }}</div></div>
+  <div class="stat {{ 'good' if (dr - cr)|abs < 0.01 else 'bad' }}"><div class="label">Balanced</div>
+    <div class="value">{{ 'Yes' if (dr - cr)|abs < 0.01 else 'No' }}</div><div class="note">debits equal credits</div></div>
+</div>
+
+<div class="card">
+  {% for e in entries %}
+  <div class="je">
+    <div class="je-head">
+      <span class="small muted">{{ e.date|dmy }}</span>
+      <span class="kind {{ e.kind }}">{{ e.kind }}</span>
+      {% if e.link %}<a class="ref" href="{{ url_for(e.link[0], **e.link[1]) }}">{{ e.ref }}</a>{% else %}<span class="ref">{{ e.ref }}</span>{% endif %}
+      <span class="small muted">{{ e.narration }}</span>
+      <span class="amt">&#8377;{{ e.lines|sum(attribute='dr')|inr }}</span>
+    </div>
+    <table><tbody>
+      {% for l in e.lines %}<tr>
+        <td class="{{ 'cr-name' if l.cr and not l.dr }}">{{ 'To ' if l.cr and not l.dr }}<a href="{{ url_for('ledger', account=l.acc, preset='fy') }}">{{ l.name }}</a>{% if l.party_name %} <span class="small muted">&middot; {{ l.party_name }}</span>{% endif %}</td>
+        <td class="num" style="width:130px">{{ l.dr|inr if l.dr else '' }}</td>
+        <td class="num" style="width:130px">{{ l.cr|inr if l.cr else '' }}</td>
+      </tr>{% endfor %}
+    </tbody></table>
+  </div>
+  {% else %}
+  <p class="empty"><strong>No entries in this period</strong>Sales, purchases, batches, expenses and receipts appear here as soon as they are saved.</p>
+  {% endfor %}
+  {% if count > entries|length %}<p class="note-line">Showing the latest {{ entries|length }} of {{ count }} entries &mdash; narrow the dates, or download the CSV for all of them.</p>{% endif %}
+</div>
+{% endblock %}

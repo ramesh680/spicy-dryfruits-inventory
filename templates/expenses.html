@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icons %}
+{% import "_filters.html" as fl %}
+{% block body %}
+<div class="page-head">
+  <div><h1>Expenses</h1><p class="sub">{{ start|dmy }} to {{ end|dmy }}{% if q %} &middot; matching &ldquo;{{ q }}&rdquo;{% endif %} &middot; every expense posts straight into the P&amp;L and the books</p></div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('export', kind='expenses', start=start, end=end) }}">{{ icons.ic('down', 15) }} CSV</a>
+    <a class="btn primary" href="{{ url_for('expense_new') }}">{{ icons.ic('plus', 15) }} Record expense</a>
+  </div>
+</div>
+
+{{ fl.rangebar('expenses', presets, preset, start, end, q, 'Head, description, paid to or ref') }}
+
+<div class="grid g4" style="margin-bottom:1.1rem">
+  <div class="stat accent"><div class="label">Spent</div><div class="value">&#8377;{{ amount|inr }}</div><div class="note">{{ rows|length }} entr{{ 'y' if rows|length == 1 else 'ies' }}, before GST</div></div>
+  <div class="stat"><div class="label">GST input credit</div><div class="value">&#8377;{{ gst|inr }}</div><div class="note">claimable against output tax</div></div>
+  <div class="stat"><div class="label">Paid out</div><div class="value">&#8377;{{ total|inr }}</div><div class="note">including GST</div></div>
+  <div class="stat"><div class="label">Biggest head</div><div class="value" style="font-size:1.15rem">{{ heads[0].name if heads else '&ndash;'|safe }}</div>
+    <div class="note">{% if heads %}&#8377;{{ heads[0].amount|inr }}{% else %}nothing yet{% endif %}</div></div>
+</div>
+
+<div class="split">
+  <div class="card">
+    <h2>Entries</h2>
+    <div class="tw"><table>
+      <thead><tr><th>Date</th><th>Head</th><th>Paid to</th><th class="num">Amount</th><th class="num">GST</th><th class="num">Total</th><th></th></tr></thead>
+      <tbody>
+      {% for r in rows %}<tr>
+        <td class="small muted">{{ r.exp_date|dmy }}{% if r.ref_no %}<div>{{ r.ref_no }}</div>{% endif %}</td>
+        <td><a href="{{ url_for('expense_view', eid=r.id) }}">{{ r.head }}</a>{% if r.description %}<div class="small muted">{{ r.description }}</div>{% endif %}</td>
+        <td>{{ r.party_name or '&ndash;'|safe }}<div class="small muted">{{ r.payment_mode }}</div></td>
+        <td class="num">{{ r.amount|inr }}</td>
+        <td class="num">{{ (r.cgst + r.sgst + r.igst)|inr }}</td>
+        <td class="num" style="font-weight:640">&#8377;{{ r.total|inr }}</td>
+        <td class="num">{% if is_admin %}<a class="btn sm" href="{{ url_for('expense_edit', eid=r.id) }}">Edit</a>{% endif %}</td>
+      </tr>{% else %}<tr><td colspan="7" class="empty">
+        <strong>{% if q %}Nothing matches that search{% else %}No expenses in this period{% endif %}</strong>
+        Rent, packing, delivery, salaries &mdash; record them here and net profit takes them into account.</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h2>By head</h2>
+    <p class="sub">Where the money went in this period.</p>
+    <table><tbody>
+      {% for h in heads %}<tr><td>{{ h.name }}<div class="small muted">{{ h.n }} entr{{ 'y' if h.n == 1 else 'ies' }}</div></td>
+        <td class="num">&#8377;{{ h.amount|inr }}</td></tr>
+      {% else %}<tr><td class="empty">Nothing yet.</td></tr>{% endfor %}
+    </tbody>
+    {% if heads %}<tfoot><tr><td>Total</td><td class="num">&#8377;{{ amount|inr }}</td></tr></tfoot>{% endif %}
+    </table>
+    <p class="note-line">Need another head, such as &ldquo;Stall fees&rdquo;? Add it on the <a href="{{ url_for('accounts') }}">chart of accounts</a>.</p>
+  </div>
+</div>
+{% endblock %}

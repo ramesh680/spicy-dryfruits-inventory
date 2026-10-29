@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div><h1>{{ 'Edit ' ~ doc.j_no if doc else 'New journal entry' }}</h1>
+    <p class="sub">For what the other screens do not cover: opening cash and bank, capital, depreciation, GST set-off, corrections. Debits must equal credits.</p></div>
+  <div class="actions"><a class="btn" href="{{ url_for('day_book') }}">Journal</a></div>
+</div>
+
+<form method="post" id="jf" data-existing='{{ existing_json }}' data-party-accounts='{{ party_accounts }}'>
+  <div class="card">
+    <div class="row r3">
+      <div class="field"><label for="j_date">Date</label>
+        <input type="date" id="j_date" name="j_date" value="{{ doc.j_date if doc else today }}" required></div>
+      <div class="field" style="grid-column:span 2"><label for="narration">Narration</label>
+        <input id="narration" name="narration" value="{{ doc.narration if doc else '' }}" placeholder="Why this entry is being made" required></div>
+    </div>
+    {% if not doc %}
+    <div class="field" style="max-width:420px"><label for="tpl">Start from a common entry</label>
+      <select id="tpl">
+        <option value="">&mdash; blank &mdash;</option>
+        <option value="capital_bank">Capital put in (to bank)</option>
+        <option value="capital_cash">Capital put in (cash)</option>
+        <option value="opening_cash">Opening cash in hand</option>
+        <option value="opening_bank">Opening bank balance</option>
+        <option value="deposit">Cash deposited in bank</option>
+        <option value="withdraw">Cash withdrawn from bank</option>
+        <option value="drawings">Drawings (taken for personal use)</option>
+        <option value="gst_setoff">GST input credit set off against output tax</option>
+      </select></div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="tw"><table>
+      <thead><tr><th style="min-width:220px">Account</th><th style="min-width:150px">Party (debtors / creditors)</th>
+        <th class="num" style="width:130px">Debit</th><th class="num" style="width:130px">Credit</th><th>Memo</th><th style="width:40px"></th></tr></thead>
+      <tbody id="jlines"></tbody>
+      <tfoot><tr><td colspan="2">Total <span id="j-state" class="badge b-grey" style="margin-left:.5rem"></span></td>
+        <td class="num" id="j-dr">0.00</td><td class="num" id="j-cr">0.00</td><td colspan="2"></td></tr></tfoot>
+    </table></div>
+    <div class="btn-row" style="margin-top:.8rem"><button type="button" class="btn sm" id="add-line">+ Add line</button></div>
+  </div>
+
+  <template id="acc-options">
+    <option value="">Choose account</option>
+    {% set ns = namespace(grp='') %}
+    {% for a in accounts %}
+      {% if a.grp != ns.grp %}{% if ns.grp %}</optgroup>{% endif %}<optgroup label="{{ a.grp }}">{% set ns.grp = a.grp %}{% endif %}
+      <option value="{{ a.id }}">{{ a.name }}</option>
+    {% endfor %}{% if ns.grp %}</optgroup>{% endif %}
+  </template>
+  <template id="party-options">
+    <option value="">&ndash;</option>
+    {% for p in parties %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+  </template>
+
+  <div class="btn-row">
+    <button class="btn primary" type="submit" id="j-save">{{ 'Save changes' if doc else 'Save entry' }}</button>
+    <a class="btn" href="{{ url_for('day_book') }}">Cancel</a>
+  </div>
+</form>
+{% if doc and is_admin %}
+<form method="post" action="{{ url_for('journal_delete', jid=doc.id) }}" style="margin-top:1rem"
+      onsubmit="return confirm('Delete {{ doc.j_no }}? This cannot be undone.')">
+  <button class="btn danger" type="submit">Delete entry</button>
+</form>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var f = document.getElementById('jf'), body = document.getElementById('jlines');
+  var accOpts = document.getElementById('acc-options').innerHTML, partyOpts = document.getElementById('party-options').innerHTML;
+  var partyAccs = JSON.parse(f.dataset.partyAccounts || '[]').map(String);
+  var K = {cash: '{{ K.cash }}', bank: '{{ K.bank }}', capital: '{{ K.capital }}', opening: '{{ K.opening }}',
+           drawings: '{{ K.drawings }}', out_cgst: '{{ K.out_cgst }}', out_sgst: '{{ K.out_sgst }}',
+           itc_cgst: '{{ K.itc_cgst }}', itc_sgst: '{{ K.itc_sgst }}'};
+  function fmt(n) { return (Math.round(n * 100) / 100).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+
+  function addRow(l) {
+    l = l || {};
+    var tr = document.createElement('tr'); tr.className = 'jl-row';
+    tr.innerHTML = '<td><select name="acc_id">' + accOpts + '</select></td>' +
+      '<td><select name="line_party">' + partyOpts + '</select></td>' +
+      '<td class="num"><input type="number" name="debit" step="0.01" min="0" style="text-align:right"></td>' +
+      '<td class="num"><input type="number" name="credit" step="0.01" min="0" style="text-align:right"></td>' +
+      '<td><input name="memo" placeholder="optional"></td>' +
+      '<td><button type="button" class="btn sm danger rm" aria-label="Remove line">&times;</button></td>';
+    body.appendChild(tr);
+    var acc = tr.querySelector('[name=acc_id]'), party = tr.querySelector('[name=line_party]'),
+        d = tr.querySelector('[name=debit]'), c = tr.querySelector('[name=credit]');
+    acc.value = l.acc_id || ''; party.value = l.party_id || '';
+    d.value = l.debit ? l.debit : ''; c.value = l.credit ? l.credit : '';
+    tr.querySelector('[name=memo]').value = l.memo || '';
+    // typing a debit clears the credit on the same line, and the other way round
+    d.addEventListener('input', function () { if (d.value) c.value = ''; recalc(); });
+    c.addEventListener('input', function () { if (c.value) d.value = ''; recalc(); });
+    acc.addEventListener('change', recalc);
+    tr.querySelector('.rm').addEventListener('click', function () { tr.remove(); recalc(); });
+    recalc();
+  }
+
+  function recalc() {
+    var dr = 0, cr = 0;
+    body.querySelectorAll('tr').forEach(function (tr) {
+      dr += parseFloat(tr.querySelector('[name=debit]').value) || 0;
+      cr += parseFloat(tr.querySelector('[name=credit]').value) || 0;
+      var needs = partyAccs.indexOf(tr.querySelector('[name=acc_id]').value) >= 0;
+      tr.querySelector('[name=line_party]').style.opacity = needs ? 1 : .45;
+    });
+    document.getElementById('j-dr').textContent = fmt(dr);
+    document.getElementById('j-cr').textContent = fmt(cr);
+    var state = document.getElementById('j-state'), diff = Math.round((dr - cr) * 100) / 100;
+    if (dr === 0 && cr === 0) { state.className = 'badge b-grey'; state.textContent = 'empty'; }
+    else if (diff === 0) { state.className = 'badge b-green'; state.textContent = 'balanced'; }
+    else { state.className = 'badge b-red'; state.textContent = (diff > 0 ? 'credits short by ' : 'debits short by ') + fmt(Math.abs(diff)); }
+    document.getElementById('j-save').disabled = !(dr > 0 && diff === 0);
+  }
+
+  var TPL = {
+    capital_bank: ['Capital introduced into the bank account', [[K.bank, 1, 0], [K.capital, 0, 1]]],
+    capital_cash: ['Capital introduced in cash', [[K.cash, 1, 0], [K.capital, 0, 1]]],
+    opening_cash: ['Opening cash in hand', [[K.cash, 1, 0], [K.opening, 0, 1]]],
+    opening_bank: ['Opening bank balance', [[K.bank, 1, 0], [K.opening, 0, 1]]],
+    deposit: ['Cash deposited in bank', [[K.bank, 1, 0], [K.cash, 0, 1]]],
+    withdraw: ['Cash withdrawn from bank', [[K.cash, 1, 0], [K.bank, 0, 1]]],
+    drawings: ['Drawings for personal use', [[K.drawings, 1, 0], [K.cash, 0, 1]]],
+    gst_setoff: ['Input tax credit set off against output tax', [[K.out_cgst, 1, 0], [K.out_sgst, 1, 0], [K.itc_cgst, 0, 1], [K.itc_sgst, 0, 1]]]
+  };
+  var tpl = document.getElementById('tpl');
+  if (tpl) tpl.addEventListener('change', function () {
+    var t = TPL[tpl.value]; if (!t) return;
+    body.innerHTML = '';
+    document.getElementById('narration').value = t[0];
+    t[1].forEach(function (l) { addRow({acc_id: l[0]}); });
+    var rows = body.querySelectorAll('tr');
+    t[1].forEach(function (l, i) {
+      rows[i].querySelector(l[1] ? '[name=debit]' : '[name=credit]').placeholder = 'amount';
+    });
+    var firstDr = rows[0].querySelector('[name=debit]');
+    if (rows.length === 2) {
+      // a two-line entry: the amount typed once fills both sides
+      var other = rows[1].querySelector('[name=credit]');
+      firstDr.addEventListener('input', function () { other.value = firstDr.value; recalc(); });
+    }
+    firstDr.focus();
+  });
+
+  var existing = JSON.parse(f.dataset.existing || '[]');
+  if (existing.length) existing.forEach(addRow); else { addRow(); addRow(); }
+  document.getElementById('add-line').addEventListener('click', function () { addRow(); });
+})();
+</script>
+{% endblock %}
